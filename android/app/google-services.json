@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "866719918714",
+    "project_id": "expensesheet-dc273",
+    "storage_bucket": "expensesheet-dc273.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:866719918714:android:34e34f6847893eaad429c3",
+        "android_client_info": {
+          "package_name": "com.example.expensesheet"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "866719918714-3odkjv3l81gk0nvevmmsv3mj0cg7r293.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA3BqbAxMbkugenXHNqO1vdb3tyCjTvBkQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "866719918714-3odkjv3l81gk0nvevmmsv3mj0cg7r293.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
