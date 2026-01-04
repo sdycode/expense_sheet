@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
-import 'package:zoom_tap_animation/zoom_tap_animation.dart';
 import '../models/expense.dart';
 import '../services/google_sheets_service.dart';
 import '../utils/expense_categories.dart';
@@ -28,12 +27,37 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
   String? _selectedCategory;
   DateTime? _selectedMonth;
   DateTime? _selectedDate;
+  String _selectedPaidBy = 'All';
+  bool? _filterOneTimePurchase; // null = all, true = one-time only, false = recurring only
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+  bool _hasUpdatedCategories = false;
 
   @override
   void initState() {
     super.initState();
     widget.sheetsService.setSpreadsheetId(widget.spreadsheetId);
-    _loadExpenses();
+    _loadExpenses().then((_) {
+      // Auto-update categories on first load if needed
+      if (!_hasUpdatedCategories && _allExpenses.isNotEmpty) {
+        // Check if any expenses need category updates
+        final needsUpdate = _allExpenses.any((expense) {
+          final newCategory = _mapCategoryToNew(expense.category);
+          return newCategory != expense.category;
+        });
+        
+        if (needsUpdate) {
+          _hasUpdatedCategories = true;
+          _updateExpenseCategories();
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadExpenses() async {
@@ -59,6 +83,89 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
     }
   }
 
+  String? _mapCategoryToNew(String? oldCategory) {
+    if (oldCategory == null || oldCategory.isEmpty) {
+      return null;
+    }
+    
+    final lowerCategory = oldCategory.toLowerCase();
+    
+    // Map to new categories based on keywords
+    if (lowerCategory.contains('milk')) {
+      return 'Milk';
+    } else if (lowerCategory.contains('vegetable')) {
+      return 'Vegetables';
+    } else if (lowerCategory.contains('petrol')) {
+      return 'Petrol';
+    } else if (lowerCategory.contains('travel') || 
+               lowerCategory.contains('cab') || 
+               lowerCategory.contains('auto')) {
+      return 'Travel Cab Auto';
+    } else if (lowerCategory.contains('clothes') || 
+               lowerCategory.contains('fashion')) {
+      return 'Clothes - Fashion';
+    }
+    
+    // Return original if no match
+    return oldCategory;
+  }
+
+  Future<void> _updateExpenseCategories() async {
+    setState(() => _isLoading = true);
+    
+    try {
+      int updatedCount = 0;
+      
+      for (var expense in _allExpenses) {
+        final newCategory = _mapCategoryToNew(expense.category);
+        
+        // Only update if category changed
+        if (newCategory != expense.category) {
+          final updatedExpense = Expense(
+            id: expense.id,
+            label: expense.label,
+            price: expense.price,
+            category: newCategory,
+            note: expense.note,
+            expenseDate: expense.expenseDate,
+            timestamp: expense.timestamp,
+            paidBy: expense.paidBy,
+            isOneTimePurchase: expense.isOneTimePurchase,
+          );
+          
+          await widget.sheetsService.updateExpense(updatedExpense);
+          updatedCount++;
+        }
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Updated $updatedCount expense(s) with new categories'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      
+      // Reload expenses to reflect changes
+      await _loadExpenses();
+    } catch (e) {
+      debugPrint('Error updating expense categories: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error updating categories: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
   void _applyFilters() {
     var filtered = List<Expense>.from(_allExpenses);
 
@@ -71,6 +178,16 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
               !ExpenseCategories.categories.contains(e.category);
         }
         return e.category == _selectedCategory;
+      }).toList();
+    }
+
+    // Paid By filter
+    if (_selectedPaidBy != 'All') {
+      filtered = filtered.where((e) {
+        if (_selectedPaidBy == 'Not Specified') {
+          return e.paidBy == null || e.paidBy!.isEmpty;
+        }
+        return e.paidBy == _selectedPaidBy;
       }).toList();
     }
 
@@ -91,6 +208,26 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
       }).toList();
     }
 
+    // One Time Purchase filter
+    if (_filterOneTimePurchase != null) {
+      filtered = filtered.where((e) {
+        return e.isOneTimePurchase == _filterOneTimePurchase;
+      }).toList();
+    }
+
+    // Search filter
+    if (_searchQuery.isNotEmpty) {
+      final searchWords = _searchQuery.toLowerCase().trim().split(' ').where((word) => word.isNotEmpty).toList();
+      filtered = filtered.where((e) {
+        final label = e.label.toLowerCase();
+        final note = (e.note ?? '').toLowerCase();
+        final searchText = '$label $note';
+        
+        // All search words must be found in label or note
+        return searchWords.every((word) => searchText.contains(word));
+      }).toList();
+    }
+
     // Sort by date (newest first)
     filtered.sort((a, b) => b.expenseDate.compareTo(a.expenseDate));
 
@@ -100,16 +237,121 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
   }
 
   Future<void> _selectMonth() async {
-    final DateTime? picked = await showDatePicker(
+    final now = DateTime.now();
+    final currentYear = _selectedMonth?.year ?? now.year;
+    final currentMonth = _selectedMonth?.month ?? now.month;
+    
+    int? selectedYear = currentYear;
+    int? selectedMonth = currentMonth;
+    
+    final result = await showDialog<Map<String, int>>(
       context: context,
-      initialDate: _selectedMonth ?? DateTime.now(),
-      firstDate: DateTime(2000),
-      lastDate: DateTime.now(),
-      helpText: 'Select Month',
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Select Month & Year'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Year selector
+                    Row(
+                      children: [
+                        const Text('Year: '),
+                        Expanded(
+                          child: DropdownButton<int>(
+                            value: selectedYear,
+                            isExpanded: true,
+                            items: List.generate(
+                              now.year - 1999,
+                              (index) => now.year - index,
+                            ).map((year) {
+                              return DropdownMenuItem(
+                                value: year,
+                                child: Text(year.toString()),
+                              );
+                            }).toList(),
+                            onChanged: (value) {
+                              setDialogState(() {
+                                selectedYear = value;
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    // Month grid
+                    GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        childAspectRatio: 2.5,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                      ),
+                      itemCount: 12,
+                      itemBuilder: (context, index) {
+                        final month = index + 1;
+                        final isSelected = selectedMonth == month;
+                        return InkWell(
+                          onTap: () {
+                            setDialogState(() {
+                              selectedMonth = month;
+                            });
+                          },
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Colors.grey[200],
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              DateFormat('MMM').format(DateTime(2000, month)),
+                              style: TextStyle(
+                                color: isSelected ? Colors.white : Colors.black,
+                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (selectedYear != null && selectedMonth != null) {
+                      Navigator.pop(context, {
+                        'year': selectedYear!,
+                        'month': selectedMonth!,
+                      });
+                    }
+                  },
+                  child: const Text('Select'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
-    if (picked != null) {
+    
+    if (result != null) {
       setState(() {
-        _selectedMonth = DateTime(picked.year, picked.month);
+        _selectedMonth = DateTime(result['year']!, result['month']!);
         _selectedDate = null; // Clear date filter when month is selected
       });
       _applyFilters();
@@ -137,8 +379,33 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
       _selectedCategory = null;
       _selectedMonth = null;
       _selectedDate = null;
+      _selectedPaidBy = 'All';
+      _filterOneTimePurchase = null;
+      _searchQuery = '';
+      _searchController.clear();
     });
     _applyFilters();
+  }
+
+  void _onSearchChanged(String query) {
+    setState(() {
+      _searchQuery = query;
+    });
+    _applyFilters();
+  }
+
+  List<String> _getPaidByOptions() {
+    final paidBySet = <String>{};
+    for (var expense in _allExpenses) {
+      if (expense.paidBy != null && expense.paidBy!.isNotEmpty) {
+        paidBySet.add(expense.paidBy!);
+      }
+    }
+    final options = ['All', ...paidBySet.toList()..sort()];
+    if (_allExpenses.any((e) => e.paidBy == null || e.paidBy!.isEmpty)) {
+      options.add('Not Specified');
+    }
+    return options;
   }
 
   double _getTotalAmount() {
@@ -149,8 +416,43 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Expenses'),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () => Navigator.pop(context),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+        ),
+        leadingWidth: 40,
+        automaticallyImplyLeading: false,
+        title: TextField(
+          controller: _searchController,
+          decoration: InputDecoration(
+            hintText: 'Search by label or notes...',
+            hintStyle: const TextStyle(color: Colors.grey),
+            prefixIcon: const Icon(Icons.search, color: Colors.black),
+            suffixIcon: _searchQuery.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.clear, color: Colors.black),
+                    onPressed: () {
+                      _searchController.clear();
+                      _onSearchChanged('');
+                    },
+                  )
+                : null,
+            border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+          style: const TextStyle(color: Colors.black),
+          onChanged: _onSearchChanged,
+        ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.update),
+            onPressed: _updateExpenseCategories,
+            tooltip: 'Update Categories',
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadExpenses,
@@ -162,35 +464,44 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
         children: [
           // Filters Section
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             color: Colors.grey[100],
             child: Column(
               children: [
                 // Category Filter - Chips
                 SizedBox(
-                  height: 50,
+                  height: 32,
                   child: ListView(
                     scrollDirection: Axis.horizontal,
                     children: [
                       FilterChip(
                         label: const Text(
                           'All',
-                          style: TextStyle(color: Colors.black),
+                          style: TextStyle(
+                            color: Colors.black,
+                            fontSize: 11,
+                          ),
                         ),
                         selected: _selectedCategory == null,
                         onSelected: (selected) {
                           setState(() => _selectedCategory = null);
                           _applyFilters();
                         },
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 4),
                       ...ExpenseCategories.categories.map((category) {
                         return Padding(
-                          padding: const EdgeInsets.only(right: 8),
+                          padding: const EdgeInsets.only(right: 4),
                           child: FilterChip(
                             label: Text(
                               category,
-                              style: const TextStyle(color: Colors.black),
+                              style: const TextStyle(
+                                color: Colors.black,
+                                fontSize: 11,
+                              ),
                             ),
                             selected: _selectedCategory == category,
                             onSelected: (selected) {
@@ -199,65 +510,207 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                               });
                               _applyFilters();
                             },
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
                           ),
                         );
                       }),
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-                // Date Filters
+                const SizedBox(height: 8),
+                // Date Filters and Paid By
                 Row(
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
                         style: ButtonStyle(
-                          padding: MaterialStateProperty.all(EdgeInsets.zero),
+                          padding: MaterialStateProperty.all(
+                            const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          ),
                           foregroundColor: MaterialStateProperty.all(
                             Colors.black,
                           ),
+                          minimumSize: MaterialStateProperty.all(const Size(0, 32)),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
                         onPressed: _selectMonth,
                         icon: const Icon(
                           Icons.calendar_month,
                           color: Colors.black,
+                          size: 16,
                         ),
                         label: Text(
                           _selectedMonth != null
                               ? DateFormat('MMM yyyy').format(_selectedMonth!)
-                              : 'Select Month',
-                          style: const TextStyle(color: Colors.black),
+                              : 'Month',
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 12,
+                          ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 4),
                     Expanded(
                       child: OutlinedButton.icon(
                         style: ButtonStyle(
-                          padding: MaterialStateProperty.all(EdgeInsets.zero),
+                          padding: MaterialStateProperty.all(
+                            const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          ),
                           foregroundColor: MaterialStateProperty.all(
                             Colors.black,
                           ),
+                          minimumSize: MaterialStateProperty.all(const Size(0, 32)),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
                         onPressed: _selectDate,
                         icon: const Icon(
                           Icons.calendar_today,
                           color: Colors.black,
+                          size: 16,
                         ),
                         label: Text(
                           _selectedDate != null
                               ? DateFormat(
                                   'MMM dd, yyyy',
                                 ).format(_selectedDate!)
-                              : 'Select Date',
-                          style: const TextStyle(color: Colors.black),
+                              : 'Date',
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 12,
+                          ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: PopupMenuButton<String>(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.person,
+                                color: Colors.black,
+                                size: 16,
+                              ),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  _selectedPaidBy,
+                                  style: const TextStyle(
+                                    color: Colors.black,
+                                    fontSize: 12,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const Icon(
+                                Icons.arrow_drop_down,
+                                color: Colors.black,
+                                size: 16,
+                              ),
+                            ],
+                          ),
+                        ),
+                        itemBuilder: (context) {
+                          return _getPaidByOptions().map((option) {
+                            return PopupMenuItem<String>(
+                              value: option,
+                              child: Text(option),
+                            );
+                          }).toList();
+                        },
+                        onSelected: (value) {
+                          setState(() {
+                            _selectedPaidBy = value;
+                          });
+                          _applyFilters();
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    PopupMenuButton<String>(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.shopping_cart,
+                              color: Colors.black,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(
+                                _filterOneTimePurchase == null
+                                    ? 'All'
+                                    : _filterOneTimePurchase == true
+                                        ? 'One-Time'
+                                        : 'Recurring',
+                                style: const TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 12,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const Icon(
+                              Icons.arrow_drop_down,
+                              color: Colors.black,
+                              size: 16,
+                            ),
+                          ],
+                        ),
+                      ),
+                      itemBuilder: (context) {
+                        return [
+                          const PopupMenuItem(
+                            value: 'all',
+                            child: Text('All'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'oneTime',
+                            child: Text('One-Time Only'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'recurring',
+                            child: Text('Recurring Only'),
+                          ),
+                        ];
+                      },
+                      onSelected: (value) {
+                        setState(() {
+                          if (value == 'all') {
+                            _filterOneTimePurchase = null;
+                          } else if (value == 'oneTime') {
+                            _filterOneTimePurchase = true;
+                          } else {
+                            _filterOneTimePurchase = false;
+                          }
+                        });
+                        _applyFilters();
+                      },
+                    ),
+                    const SizedBox(width: 4),
                     InkWell(
-                      child: const Icon(Icons.clear),
                       onTap: _clearFilters,
+                      child: const Padding(
+                        padding: EdgeInsets.all(4),
+                        child: Icon(Icons.clear, size: 18),
+                      ),
                     ),
                   ],
                 ),
@@ -327,6 +780,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                           expense: expense,
                           onEdit: () => _editExpense(expense),
                           onDelete: () => _deleteExpense(expense),
+                          isSearching: _searchQuery.isNotEmpty,
                         );
                       },
                     ),
@@ -463,144 +917,248 @@ class _ExpenseCard extends StatelessWidget {
   final Expense expense;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final bool isSearching;
 
   const _ExpenseCard({
     required this.expense,
     required this.onEdit,
     required this.onDelete,
+    required this.isSearching,
   });
+
+  void _showDetailsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          expense.label,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildDetailRow('Amount', '₹${expense.price.toStringAsFixed(0)}'),
+              if (expense.category != null && expense.category!.isNotEmpty)
+                _buildDetailRow('Category', expense.category!),
+              if (expense.paidBy != null && expense.paidBy!.isNotEmpty)
+                _buildDetailRow('Paid By', expense.paidBy!),
+              _buildDetailRow(
+                'Date',
+                DateFormat('MMM dd, yyyy').format(expense.expenseDate),
+              ),
+              if (expense.note != null && expense.note!.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Notes:',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[100],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    expense.note!,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              '$label:',
+              style: const TextStyle(
+                fontWeight: FontWeight.w500,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(fontSize: 14),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showActionDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(expense.label),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Amount: ₹${expense.price.toStringAsFixed(0)}'),
+            if (expense.category != null && expense.category!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('Category: ${expense.category}'),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              onEdit();
+            },
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.edit, size: 18),
+                SizedBox(width: 4),
+                Text('Edit'),
+              ],
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              onDelete();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.delete, size: 18),
+                SizedBox(width: 4),
+                Text('Delete'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
-      elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            // Category Icon
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(8),
+    return GestureDetector(
+      onTap: () => _showDetailsDialog(context),
+      onLongPress: () => _showActionDialog(context),
+      onDoubleTap: () => _showActionDialog(context),
+      child: Card(
+        margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+        elevation: 1,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              // Category Icon
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  _getCategoryIcon(expense.category),
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                  size: 20,
+                ),
               ),
-              child: Icon(
-                _getCategoryIcon(expense.category),
-                color: Theme.of(context).colorScheme.onPrimaryContainer,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 12),
-            // Main Content
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          expense.label,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (expense.category != null &&
-                          expense.category!.isNotEmpty)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.grey[200],
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            expense.category!,
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.grey[700],
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  if (expense.note != null && expense.note!.isNotEmpty) ...[
-                    const SizedBox(height: 2),
+              const SizedBox(width: 12),
+              // Main Content
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Label takes full width
                     Text(
-                      expense.note!,
-                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                      expense.label,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            // Price and Actions
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ZoomTapAnimation(
-                      onTap: onEdit,
-                      child: Padding(
-                        padding: const EdgeInsets.all(4),
-                        child: Icon(
-                          Icons.edit,
-                          size: 20,
-                          color: Colors.blue[700],
+                    // Category below label
+                    if (expense.category != null &&
+                        expense.category!.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    ZoomTapAnimation(
-                      onTap: onDelete,
-                      child: Padding(
-                        padding: const EdgeInsets.all(4),
-                        child: Icon(
-                          Icons.delete,
-                          size: 20,
-                          color: Colors.red[700],
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(4),
                         ),
-                      ),
-                    ),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(
-                        minWidth: 50,
-                        minHeight: 32,
-                      ),
-                      child: Align(
-                        alignment: Alignment.centerRight,
                         child: Text(
-                          '₹${expense.price.toStringAsFixed(0)}',
+                          expense.category!,
                           style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: Theme.of(context).colorScheme.primary,
+                            fontSize: 10,
+                            color: Colors.grey[700],
                           ),
                         ),
                       ),
-                    ),
+                    ],
+                    // Notes - only visible when searching
+                    if (isSearching &&
+                        expense.note != null &&
+                        expense.note!.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        expense.note!,
+                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ],
                 ),
-              ],
-            ),
-          ],
+              ),
+              const SizedBox(width: 8),
+              // Price
+              Text(
+                '₹${expense.price.toStringAsFixed(0)}',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

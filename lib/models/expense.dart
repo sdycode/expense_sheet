@@ -9,6 +9,7 @@ class Expense {
   final DateTime expenseDate;
   final DateTime timestamp;
   final String? paidBy;
+  final bool isOneTimePurchase;
 
   Expense({
     String? id,
@@ -19,6 +20,7 @@ class Expense {
     required this.expenseDate,
     DateTime? timestamp,
     this.paidBy,
+    this.isOneTimePurchase = false,
   }) : id = id ?? const Uuid().v4(),
        timestamp = timestamp ?? DateTime.now();
 
@@ -32,6 +34,7 @@ class Expense {
       'expenseDate': expenseDate.toIso8601String().split('T')[0],
       'timestamp': timestamp.toIso8601String(),
       'paidBy': paidBy ?? '',
+      'isOneTimePurchase': isOneTimePurchase,
     };
   }
 
@@ -45,6 +48,7 @@ class Expense {
       expenseDate.toIso8601String().split('T')[0],
       timestamp.toIso8601String(),
       paidBy ?? '',
+      isOneTimePurchase ? 'TRUE' : 'FALSE',
     ];
   }
 
@@ -62,5 +66,9 @@ class Expense {
       timestamp = map['timestamp'] is DateTime
           ? map['timestamp'] as DateTime
           : DateTime.tryParse(map['timestamp'].toString()) ?? DateTime.now(),
-      paidBy = map['paidBy'] as String?;
+      paidBy = map['paidBy'] as String?,
+      isOneTimePurchase = map['isOneTimePurchase'] is bool
+          ? map['isOneTimePurchase'] as bool
+          : (map['isOneTimePurchase']?.toString().toUpperCase() == 'TRUE' || 
+             map['isOneTimePurchase']?.toString() == '1');
 }

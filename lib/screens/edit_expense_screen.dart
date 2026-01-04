@@ -27,6 +27,7 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
   late String? _selectedCategory;
   late String? _selectedPaidBy;
   late DateTime _selectedDate;
+  late bool _isOneTimePurchase;
   bool _isLoading = false;
   bool _isLoadingPersonNames = true;
   List<String> _personNames = [];
@@ -42,6 +43,7 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
     _selectedCategory = widget.expense.category;
     _selectedPaidBy = widget.expense.paidBy;
     _selectedDate = widget.expense.expenseDate;
+    _isOneTimePurchase = widget.expense.isOneTimePurchase;
     _loadPersonNames();
   }
 
@@ -117,6 +119,7 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
       expenseDate: _selectedDate,
       timestamp: widget.expense.timestamp, // Keep original timestamp
       paidBy: _selectedPaidBy,
+      isOneTimePurchase: _isOneTimePurchase,
     );
 
     // Close screen immediately for better UX
@@ -237,7 +240,7 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Category and Date in one row
+              // Category, Date, and One Time Purchase in one row
               Row(
                 children: [
                   Expanded(
@@ -313,6 +316,30 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
                           ],
                         ),
                       ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.shopping_cart, size: 20),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'One Time',
+                          style: TextStyle(fontSize: 14),
+                        ),
+                        const SizedBox(width: 8),
+                        Switch(
+                          value: _isOneTimePurchase,
+                          onChanged: (value) {
+                            setState(() {
+                              _isOneTimePurchase = value;
+                            });
+                          },
+                        ),
+                      ],
                     ),
                   ),
                 ],

@@ -139,6 +139,7 @@ class GoogleSheetsService {
   }
 
   Future<bool> addExpense(Expense expense) async {
+    debugPrint('ids are $_sheetsApi, $_spreadsheetId');
     if (_sheetsApi == null || _spreadsheetId == null) {
       throw Exception('Sheets API not initialized or Spreadsheet ID not set');
     }
@@ -148,7 +149,7 @@ class GoogleSheetsService {
       try {
         await _sheetsApi!.spreadsheets.values.get(
           _spreadsheetId!,
-          'Sheet1!A1:H1',
+          'Sheet1!A1:I1',
         );
       } catch (e) {
         // Headers don't exist, create them
@@ -209,7 +210,7 @@ class GoogleSheetsService {
     if (_sheetsApi == null || _spreadsheetId == null) return;
 
     final headers = [
-      ['ID', 'Label', 'Price', 'Category', 'Note', 'Expense Date', 'Timestamp', 'Paid By']
+      ['ID', 'Label', 'Price', 'Category', 'Note', 'Expense Date', 'Timestamp', 'Paid By', 'Is One Time Purchase']
     ];
 
     final valueRange = sheets.ValueRange(values: headers);
@@ -251,7 +252,7 @@ class GoogleSheetsService {
     try {
       final response = await _sheetsApi!.spreadsheets.values.get(
         _spreadsheetId!,
-        'Sheet1!A2:H', // Skip header row
+        'Sheet1!A2:I', // Skip header row
       );
 
       if (response.values == null || response.values!.isEmpty) {
@@ -267,6 +268,12 @@ class GoogleSheetsService {
         
         if (row.length >= 6) {
           try {
+            final isOneTimePurchase = row.length > 8 
+                ? (row[8].toString().toUpperCase() == 'TRUE' || 
+                   row[8].toString() == '1' ||
+                   row[8].toString().toLowerCase() == 'true')
+                : false;
+            
             final expense = Expense(
               id: row[0].toString().trim(),
               label: row[1].toString(),
@@ -280,6 +287,7 @@ class GoogleSheetsService {
               paidBy: row.length > 7 && row[7].toString().isNotEmpty
                   ? row[7].toString()
                   : null,
+              isOneTimePurchase: isOneTimePurchase,
             );
             expenses.add(expense);
           } catch (e) {

@@ -13,8 +13,7 @@ import 'utils/expense_categories.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    await Firebase.initializeApp(
-     );
+    await Firebase.initializeApp();
     debugPrint('Firebase initialized successfully');
   } catch (e) {
     debugPrint('Error initializing Firebase: $e');
@@ -76,6 +75,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
   DateTime _selectedDate = DateTime.now();
   String? _selectedCategory;
   String? _selectedPaidBy;
+  bool _isOneTimePurchase = false;
   bool _isLoading = false;
   bool _isSignedIn = false;
   String? _userEmail;
@@ -84,6 +84,8 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
   String? _selectedSpreadsheetId;
   List<String> _personNames = [];
   bool _isLoadingPersonNames = false;
+  List<Expense> _expensesToUpdate = [];
+  bool _isLoadingExpenses = false;
 
   @override
   void initState() {
@@ -123,6 +125,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
             if (_isSignedIn) {
               _sheetsService.setSpreadsheetId(firstSpreadsheet.id);
               _loadPersonNames();
+              _loadExpensesToUpdate();
             }
           } else {
             // If field has value, check if it matches a saved spreadsheet
@@ -137,6 +140,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
               if (_isSignedIn) {
                 _sheetsService.setSpreadsheetId(currentId);
                 _loadPersonNames();
+                _loadExpensesToUpdate();
               }
             } catch (e) {
               // Current ID doesn't match any saved spreadsheet
@@ -240,6 +244,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
   Future<void> _initializeSheetsApi() async {
     try {
       final accessToken = await _authService.getAccessToken();
+      debugPrint('accessToken is $accessToken');
       if (accessToken != null) {
         await _sheetsService.initializeSheetsApiWithToken(accessToken);
       }
@@ -522,6 +527,8 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
 
       // Reload saved spreadsheets to update the list
       await _loadSavedSpreadsheets();
+      // Load expenses that need category updates
+      await _loadExpensesToUpdate();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -657,6 +664,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
           : _noteController.text.trim(),
       expenseDate: _selectedDate,
       paidBy: _selectedPaidBy,
+      isOneTimePurchase: _isOneTimePurchase,
     );
 
     // Clear form immediately for better UX
@@ -667,6 +675,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
       _selectedDate = DateTime.now();
       _selectedCategory = null;
       _selectedPaidBy = null;
+      _isOneTimePurchase = false;
     });
 
     // Show success message immediately
@@ -798,6 +807,167 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
         ],
       ),
     );
+  }
+
+  String? _getCategoryFromLabelAndNotes(Expense expense) {
+    final label = expense.label.toLowerCase();
+    final note = (expense.note ?? '').toLowerCase();
+    final combinedText = '$label $note';
+    
+    // Check for keywords in label or notes
+    if (combinedText.contains('milk')) {
+      return 'Milk';
+    } else if (combinedText.contains('vegetable')) {
+      return 'Vegetables';
+    } else if (combinedText.contains('petrol')) {
+      return 'Petrol';
+    }
+    
+    // Return null if no match
+    return null;
+  }
+
+  Future<void> _loadExpensesToUpdate() async {
+    if (!_isSignedIn || _spreadsheetIdController.text.trim().isEmpty) {
+      setState(() {
+        _expensesToUpdate = [];
+      });
+      return;
+    }
+
+    setState(() => _isLoadingExpenses = true);
+    
+    try {
+      // Get all expenses
+      final expenses = await _sheetsService.getExpenses();
+      
+      // Filter expenses that have keywords (Milk, Petrol, Vegetables) in label or notes
+      final expensesToUpdate = expenses.where((expense) {
+        final newCategory = _getCategoryFromLabelAndNotes(expense);
+        // Include if we found a category from label/notes and it's different from current
+        return newCategory != null && newCategory != expense.category;
+      }).toList();
+
+      setState(() {
+        _expensesToUpdate = expensesToUpdate;
+        _isLoadingExpenses = false;
+      });
+    } catch (e) {
+      debugPrint('Error loading expenses: $e');
+      setState(() {
+        _expensesToUpdate = [];
+        _isLoadingExpenses = false;
+      });
+    }
+  }
+
+  Future<void> _updateExpenseCategory(Expense expense) async {
+    final newCategory = _getCategoryFromLabelAndNotes(expense);
+    
+    if (newCategory == null || newCategory == expense.category) {
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    
+    try {
+      final updatedExpense = Expense(
+        id: expense.id,
+        label: expense.label,
+        price: expense.price,
+        category: newCategory,
+        note: expense.note,
+        expenseDate: expense.expenseDate,
+        timestamp: expense.timestamp,
+        paidBy: expense.paidBy,
+        isOneTimePurchase: expense.isOneTimePurchase,
+      );
+      
+      await _sheetsService.updateExpense(updatedExpense);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Updated "${expense.label}" to category "$newCategory"'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      
+      // Reload the list
+      await _loadExpensesToUpdate();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error updating: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _updateAllCategories() async {
+    if (_expensesToUpdate.isEmpty) {
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    
+    try {
+      int updatedCount = 0;
+      
+      for (var expense in _expensesToUpdate) {
+        final newCategory = _getCategoryFromLabelAndNotes(expense);
+        
+        if (newCategory != null && newCategory != expense.category) {
+          final updatedExpense = Expense(
+            id: expense.id,
+            label: expense.label,
+            price: expense.price,
+            category: newCategory,
+            note: expense.note,
+            expenseDate: expense.expenseDate,
+            timestamp: expense.timestamp,
+            paidBy: expense.paidBy,
+            isOneTimePurchase: expense.isOneTimePurchase,
+          );
+          
+          await _sheetsService.updateExpense(updatedExpense);
+          updatedCount++;
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Successfully updated $updatedCount expense(s)'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      
+      // Reload the list
+      await _loadExpensesToUpdate();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error updating: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } finally {
+      setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _showAddPersonDialog() async {
@@ -995,6 +1165,11 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                             _verifiedSpreadsheetName =
                                 spreadsheet.name ?? 'Unnamed Spreadsheet';
                           });
+                          if (_isSignedIn) {
+                            _sheetsService.setSpreadsheetId(spreadsheet.id);
+                            _loadPersonNames();
+                            _loadExpensesToUpdate();
+                          }
                         },
                         itemBuilder: (context) {
                           return _savedSpreadsheets.map((spreadsheet) {
@@ -1123,7 +1298,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                 ),
                 const SizedBox(height: 16),
 
-                // Category and Date in one row
+                // Category, Date, and One Time Purchase in one row
                 Row(
                   children: [
                     Expanded(
@@ -1227,10 +1402,36 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                         ),
                       ),
                     ),
+                    const SizedBox(width: 16),
+                
                   ],
                 ),
                 const SizedBox(height: 16),
-
+    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                      
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.shopping_cart, size: 20),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'One Time',
+                            style: TextStyle(fontSize: 14),
+                          ),
+                          const SizedBox(width: 8),
+                          Switch(
+                            value: _isOneTimePurchase,
+                            onChanged: (value) {
+                              setState(() {
+                                _isOneTimePurchase = value;
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                 // Note (Optional)
                 TextFormField(
                   controller: _noteController,
@@ -1312,7 +1513,16 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                   ],
                 ),
                 const SizedBox(height: 24),
-
+                // ElevatedButton(
+                //   onPressed: () {
+                //     _initializeSheetsApi();
+                //     GoogleSheetsService().initializeSheetsApiWithToken(
+                //       FirebaseAuth.instance.currentUser!.uid,
+                //     );
+                //     // await GoogleSheetsService().initializeSheetsApiWithToken(FirebaseAuth.instance.currentUser!.uid);
+                //   },
+                //   child: Text('Initialize Sheets API'),
+                // ),
                 // Submit Button
                 ElevatedButton(
                   onPressed: _isLoading ? null : _submitExpense,
@@ -1363,11 +1573,366 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                     foregroundColor: Colors.white,
                   ),
                 ),
+                const SizedBox(height: 16),
+                // Update Categories Section
+                if (_isSignedIn && _spreadsheetIdController.text.trim().isNotEmpty && false) ...[
+                  Card(
+                    color: Colors.orange[50],
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Wrap(
+                            children: [
+                              const Icon(Icons.update, color: Colors.orange),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Expenses to Update (${_expensesToUpdate.length})',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ), IconButton(
+                                icon: const Icon(Icons.refresh),
+                                onPressed: _isLoadingExpenses ? null : _loadExpensesToUpdate,
+                                tooltip: 'Refresh List',
+                              ),
+                              if (_expensesToUpdate.isNotEmpty)
+                                ElevatedButton.icon(
+                                  onPressed: _isLoading ? null : _updateAllCategories,
+                                  icon: const Icon(Icons.update),
+                                  label: const Text('Update All'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.orange,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                ),
+                              // const Spacer(),
+                             
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          if (_isLoadingExpenses)
+                            const Center(child: CircularProgressIndicator())
+                          else if (_expensesToUpdate.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.all(16.0),
+                              child: Center(
+                                child: Text(
+                                  'No expenses need category updates',
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                              ),
+                            )
+                          else
+                            Container(
+                              constraints: const BoxConstraints(maxHeight: 400),
+                              child: ListView.builder(
+                                shrinkWrap: true,
+                                itemCount: _expensesToUpdate.length,
+                                itemBuilder: (context, index) {
+                                  final expense = _expensesToUpdate[index];
+                                  final oldCategory = expense.category ?? 'None';
+                                  final newCategory = _getCategoryFromLabelAndNotes(expense) ?? 'None';
+                                  
+                                  return Card(
+                                    margin: const EdgeInsets.only(bottom: 8),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      expense.label,
+                                                      style: const TextStyle(
+                                                        fontWeight: FontWeight.bold,
+                                                        fontSize: 15,
+                                                      ),
+                                                    ),
+                                                    if (expense.note != null && expense.note!.isNotEmpty) ...[
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        'Note: ${expense.note}',
+                                                        style: TextStyle(
+                                                          fontSize: 12,
+                                                          color: Colors.grey[600],
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ],
+                                                ),
+                                              ),
+                                              Text(
+                                                '₹${expense.price.toStringAsFixed(0)}',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Row(
+                                            children: [
+                                              const Text('Current Category: ', style: TextStyle(fontSize: 12)),
+                                              Text(
+                                                oldCategory,
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.red[700],
+                                                  decoration: TextDecoration.lineThrough,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Row(
+                                            children: [
+                                              const Text('New Category: ', style: TextStyle(fontSize: 12)),
+                                              Text(
+                                                newCategory,
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.green[700],
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 8),
+                                          Align(
+                                            alignment: Alignment.centerRight,
+                                            child: ElevatedButton.icon(
+                                              onPressed: _isLoading ? null : () => _updateExpenseCategory(expense),
+                                              icon: const Icon(Icons.update, size: 16),
+                                              label: const Text('Update'),
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: Colors.orange,
+                                                foregroundColor: Colors.white,
+                                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
               ],
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _CategoryUpdateDialog extends StatefulWidget {
+  final List<Expense> expenses;
+  final String? Function(String?) mapCategory;
+  final GoogleSheetsService sheetsService;
+  final VoidCallback onUpdateComplete;
+
+  const _CategoryUpdateDialog({
+    required this.expenses,
+    required this.mapCategory,
+    required this.sheetsService,
+    required this.onUpdateComplete,
+  });
+
+  @override
+  State<_CategoryUpdateDialog> createState() => _CategoryUpdateDialogState();
+}
+
+class _CategoryUpdateDialogState extends State<_CategoryUpdateDialog> {
+  bool _isUpdating = false;
+  int _updatedCount = 0;
+
+  Future<void> _updateAllCategories() async {
+    setState(() {
+      _isUpdating = true;
+      _updatedCount = 0;
+    });
+
+    try {
+      for (var expense in widget.expenses) {
+        final newCategory = widget.mapCategory(expense.category);
+        
+        if (newCategory != expense.category) {
+          final updatedExpense = Expense(
+            id: expense.id,
+            label: expense.label,
+            price: expense.price,
+            category: newCategory,
+            note: expense.note,
+            expenseDate: expense.expenseDate,
+            timestamp: expense.timestamp,
+            paidBy: expense.paidBy,
+            isOneTimePurchase: expense.isOneTimePurchase,
+          );
+          
+          await widget.sheetsService.updateExpense(updatedExpense);
+          setState(() {
+            _updatedCount++;
+          });
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Successfully updated $_updatedCount expense(s)'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        Navigator.pop(context);
+        widget.onUpdateComplete();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error updating: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUpdating = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          const Icon(Icons.update, color: Colors.orange),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Update Categories (${widget.expenses.length})',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Expenses that will be updated:',
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: widget.expenses.length,
+                itemBuilder: (context, index) {
+                  final expense = widget.expenses[index];
+                  final oldCategory = expense.category ?? 'None';
+                  final newCategory = widget.mapCategory(expense.category) ?? 'None';
+                  
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: ListTile(
+                      dense: true,
+                      title: Text(
+                        expense.label,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              const Text('Old: ', style: TextStyle(fontSize: 11)),
+                              Text(
+                                oldCategory,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.red[700],
+                                  decoration: TextDecoration.lineThrough,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Row(
+                            children: [
+                              const Text('New: ', style: TextStyle(fontSize: 11)),
+                              Text(
+                                newCategory,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.green[700],
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      trailing: Text(
+                        '₹${expense.price.toStringAsFixed(0)}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            if (_isUpdating) ...[
+              const SizedBox(height: 12),
+              const LinearProgressIndicator(),
+              const SizedBox(height: 8),
+              Text('Updating... ($_updatedCount/${widget.expenses.length})'),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isUpdating ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _isUpdating ? null : _updateAllCategories,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.orange,
+            foregroundColor: Colors.white,
+          ),
+          child: const Text('Update All'),
+        ),
+      ],
     );
   }
 }
