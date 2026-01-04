@@ -9,14 +9,12 @@ import 'services/google_sheets_service.dart';
 import 'services/spreadsheet_storage_service.dart';
 import 'screens/spreadsheet_selection_screen.dart';
 import 'utils/expense_categories.dart';
-import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+     );
     debugPrint('Firebase initialized successfully');
   } catch (e) {
     debugPrint('Error initializing Firebase: $e');
