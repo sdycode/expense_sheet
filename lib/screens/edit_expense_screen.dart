@@ -40,7 +40,13 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
       text: widget.expense.price.toStringAsFixed(0),
     );
     _noteController = TextEditingController(text: widget.expense.note ?? '');
-    _selectedCategory = widget.expense.category;
+    // Parse category - if comma-separated, take the first one
+    if (widget.expense.category != null && widget.expense.category!.isNotEmpty) {
+      final categories = widget.expense.category!.split(',').map((c) => c.trim()).where((c) => c.isNotEmpty).toList();
+      _selectedCategory = categories.isNotEmpty ? categories.first : null;
+    } else {
+      _selectedCategory = null;
+    }
     _selectedPaidBy = widget.expense.paidBy;
     _selectedDate = widget.expense.expenseDate;
     _isOneTimePurchase = widget.expense.isOneTimePurchase;
@@ -318,7 +324,9 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 16),
+                
+                ],
+              ),  const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
                     child: Row(
@@ -342,10 +350,7 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
                       ],
                     ),
                   ),
-                ],
-              ),
               const SizedBox(height: 16),
-
               // Paid By (Optional)
               _isLoadingPersonNames
                   ? const LinearProgressIndicator()
@@ -452,3 +457,5 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
     );
   }
 }
+
+

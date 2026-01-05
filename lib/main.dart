@@ -1402,7 +1402,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 16),
+                   
                 
                   ],
                 ),

@@ -24,11 +24,16 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
   List<Expense> _allExpenses = [];
   List<Expense> _filteredExpenses = [];
   bool _isLoading = false;
-  String? _selectedCategory;
+  Set<String> _selectedCategories = {};
+  bool _selectedOther = false;
   DateTime? _selectedMonth;
   DateTime? _selectedDate;
+  DateTime? _startDate;
+  DateTime? _endDate;
   String _selectedPaidBy = 'All';
   bool? _filterOneTimePurchase; // null = all, true = one-time only, false = recurring only
+  String _sortBy = 'date'; // 'date' or 'price'
+  bool _sortAscending = false; // false = descending (newest/highest first)
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
   bool _hasUpdatedCategories = false;
@@ -169,15 +174,34 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
   void _applyFilters() {
     var filtered = List<Expense>.from(_allExpenses);
 
-    // Category filter
-    if (_selectedCategory != null && _selectedCategory!.isNotEmpty) {
+    // Category filter - support multiple categories
+    if (_selectedCategories.isNotEmpty || _selectedOther) {
       filtered = filtered.where((e) {
-        if (_selectedCategory == 'Other') {
-          return e.category == null ||
+        // Check for "Other" category
+        if (_selectedOther) {
+          final isOther = e.category == null ||
               e.category!.isEmpty ||
-              !ExpenseCategories.categories.contains(e.category);
+              !ExpenseCategories.categories.any((cat) => 
+                e.category!.toLowerCase().contains(cat.toLowerCase()));
+          if (isOther) return true;
         }
-        return e.category == _selectedCategory;
+        
+        // Check for selected categories
+        if (_selectedCategories.isNotEmpty && e.category != null && e.category!.isNotEmpty) {
+          // Split category string (may contain multiple categories separated by comma)
+          final expenseCategories = e.category!
+              .split(',')
+              .map((c) => c.trim().toLowerCase())
+              .toSet();
+          
+          // Check if any selected category matches any expense category
+          return _selectedCategories.any((selectedCat) {
+            final lowerSelected = selectedCat.toLowerCase();
+            return expenseCategories.any((expCat) => expCat.contains(lowerSelected) || lowerSelected.contains(expCat));
+          });
+        }
+        
+        return false;
       }).toList();
     }
 
@@ -208,6 +232,22 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
       }).toList();
     }
 
+    // Date range filter
+    if (_startDate != null || _endDate != null) {
+      filtered = filtered.where((e) {
+        if (_startDate != null && e.expenseDate.isBefore(_startDate!)) {
+          return false;
+        }
+        if (_endDate != null) {
+          final endDateEndOfDay = DateTime(_endDate!.year, _endDate!.month, _endDate!.day, 23, 59, 59);
+          if (e.expenseDate.isAfter(endDateEndOfDay)) {
+            return false;
+          }
+        }
+        return true;
+      }).toList();
+    }
+
     // One Time Purchase filter
     if (_filterOneTimePurchase != null) {
       filtered = filtered.where((e) {
@@ -228,8 +268,19 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
       }).toList();
     }
 
-    // Sort by date (newest first)
-    filtered.sort((a, b) => b.expenseDate.compareTo(a.expenseDate));
+    // Sort
+    if (_sortBy == 'price') {
+      filtered.sort((a, b) {
+        final comparison = a.price.compareTo(b.price);
+        return _sortAscending ? comparison : -comparison;
+      });
+    } else {
+      // Sort by date (default)
+      filtered.sort((a, b) {
+        final comparison = a.expenseDate.compareTo(b.expenseDate);
+        return _sortAscending ? comparison : -comparison;
+      });
+    }
 
     setState(() {
       _filteredExpenses = filtered;
@@ -374,13 +425,131 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
     }
   }
 
+  Future<void> _selectDateRange() async {
+    final DateTime now = DateTime.now();
+    DateTime? startDate = _startDate ?? DateTime(now.year, now.month - 1, 1);
+    DateTime? endDate = _endDate ?? now;
+
+    final result = await showDialog<Map<String, DateTime?>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Select Date Range'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      const Text('Start Date: '),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: startDate ?? DateTime.now(),
+                              firstDate: DateTime(2000),
+                              lastDate: endDate ?? DateTime.now(),
+                            );
+                            if (picked != null) {
+                              setDialogState(() {
+                                startDate = picked;
+                              });
+                            }
+                          },
+                          child: Text(
+                            startDate != null
+                                ? DateFormat('MMM dd, yyyy').format(startDate!)
+                                : 'Select',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      const Text('End Date: '),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: endDate ?? DateTime.now(),
+                              firstDate: startDate ?? DateTime(2000),
+                              lastDate: DateTime.now(),
+                            );
+                            if (picked != null) {
+                              setDialogState(() {
+                                endDate = picked;
+                              });
+                            }
+                          },
+                          child: Text(
+                            endDate != null
+                                ? DateFormat('MMM dd, yyyy').format(endDate!)
+                                : 'Select',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    setDialogState(() {
+                      startDate = null;
+                      endDate = null;
+                    });
+                  },
+                  child: const Text('Clear'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context, {
+                      'startDate': startDate,
+                      'endDate': endDate,
+                    });
+                  },
+                  child: const Text('Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (result != null) {
+      setState(() {
+        _startDate = result['startDate'];
+        _endDate = result['endDate'];
+        _selectedMonth = null; // Clear month filter when date range is selected
+        _selectedDate = null; // Clear date filter when date range is selected
+      });
+      _applyFilters();
+    }
+  }
+
   void _clearFilters() {
     setState(() {
-      _selectedCategory = null;
+      _selectedCategories.clear();
+      _selectedOther = false;
       _selectedMonth = null;
       _selectedDate = null;
+      _startDate = null;
+      _endDate = null;
       _selectedPaidBy = 'All';
       _filterOneTimePurchase = null;
+      _sortBy = 'date';
+      _sortAscending = false;
       _searchQuery = '';
       _searchController.clear();
     });
@@ -448,11 +617,11 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
           onChanged: _onSearchChanged,
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.update),
-            onPressed: _updateExpenseCategories,
-            tooltip: 'Update Categories',
-          ),
+          // IconButton(
+          //   icon: const Icon(Icons.update),
+          //   onPressed: _updateExpenseCategories,
+          //   tooltip: 'Update Categories',
+          // ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadExpenses,
@@ -468,7 +637,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
             color: Colors.grey[100],
             child: Column(
               children: [
-                // Category Filter - Chips
+                // Category Filter - Chips (Multiple Selection)
                 SizedBox(
                   height: 32,
                   child: ListView(
@@ -482,9 +651,14 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                             fontSize: 11,
                           ),
                         ),
-                        selected: _selectedCategory == null,
+                        selected: _selectedCategories.isEmpty && !_selectedOther,
                         onSelected: (selected) {
-                          setState(() => _selectedCategory = null);
+                          setState(() {
+                            if (selected) {
+                              _selectedCategories.clear();
+                              _selectedOther = false;
+                            }
+                          });
                           _applyFilters();
                         },
                         padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -503,10 +677,14 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                                 fontSize: 11,
                               ),
                             ),
-                            selected: _selectedCategory == category,
+                            selected: _selectedCategories.contains(category),
                             onSelected: (selected) {
                               setState(() {
-                                _selectedCategory = selected ? category : null;
+                                if (selected) {
+                                  _selectedCategories.add(category);
+                                } else {
+                                  _selectedCategories.remove(category);
+                                }
                               });
                               _applyFilters();
                             },
@@ -516,203 +694,329 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                           ),
                         );
                       }),
+                      const SizedBox(width: 4),
+                      FilterChip(
+                        label: const Text(
+                          'Other',
+                          style: TextStyle(
+                            color: Colors.black,
+                            fontSize: 11,
+                          ),
+                        ),
+                        selected: _selectedOther,
+                        onSelected: (selected) {
+                          setState(() {
+                            _selectedOther = selected;
+                          });
+                          _applyFilters();
+                        },
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                      ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 8),
-                // Date Filters and Paid By
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        style: ButtonStyle(
-                          padding: MaterialStateProperty.all(
-                            const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          ),
-                          foregroundColor: MaterialStateProperty.all(
-                            Colors.black,
-                          ),
-                          minimumSize: MaterialStateProperty.all(const Size(0, 32)),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        onPressed: _selectMonth,
-                        icon: const Icon(
-                          Icons.calendar_month,
-                          color: Colors.black,
-                          size: 16,
-                        ),
-                        label: Text(
-                          _selectedMonth != null
-                              ? DateFormat('MMM yyyy').format(_selectedMonth!)
-                              : 'Month',
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        style: ButtonStyle(
-                          padding: MaterialStateProperty.all(
-                            const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          ),
-                          foregroundColor: MaterialStateProperty.all(
-                            Colors.black,
-                          ),
-                          minimumSize: MaterialStateProperty.all(const Size(0, 32)),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        onPressed: _selectDate,
-                        icon: const Icon(
-                          Icons.calendar_today,
-                          color: Colors.black,
-                          size: 16,
-                        ),
-                        label: Text(
-                          _selectedDate != null
-                              ? DateFormat(
-                                  'MMM dd, yyyy',
-                                ).format(_selectedDate!)
-                              : 'Date',
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: PopupMenuButton<String>(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.person,
-                                color: Colors.black,
-                                size: 16,
-                              ),
-                              const SizedBox(width: 4),
-                              Flexible(
-                                child: Text(
-                                  _selectedPaidBy,
-                                  style: const TextStyle(
-                                    color: Colors.black,
-                                    fontSize: 12,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const Icon(
-                                Icons.arrow_drop_down,
-                                color: Colors.black,
-                                size: 16,
-                              ),
-                            ],
-                          ),
-                        ),
-                        itemBuilder: (context) {
-                          return _getPaidByOptions().map((option) {
-                            return PopupMenuItem<String>(
-                              value: option,
-                              child: Text(option),
-                            );
-                          }).toList();
-                        },
-                        onSelected: (value) {
-                          setState(() {
-                            _selectedPaidBy = value;
-                          });
-                          _applyFilters();
-                        },
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    PopupMenuButton<String>(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
+                // Scrollable Filters Row
+                SizedBox(
+                  height: 32,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
                           children: [
-                            const Icon(
-                              Icons.shopping_cart,
-                              color: Colors.black,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 4),
-                            Flexible(
-                              child: Text(
-                                _filterOneTimePurchase == null
-                                    ? 'All'
-                                    : _filterOneTimePurchase == true
-                                        ? 'One-Time'
-                                        : 'Recurring',
+                            OutlinedButton.icon(
+                              style: ButtonStyle(
+                                padding: MaterialStateProperty.all(
+                                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                ),
+                                foregroundColor: MaterialStateProperty.all(
+                                  Colors.black,
+                                ),
+                                minimumSize: MaterialStateProperty.all(const Size(0, 32)),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              onPressed: _selectMonth,
+                              icon: const Icon(
+                                Icons.calendar_month,
+                                color: Colors.black,
+                                size: 16,
+                              ),
+                              label: Text(
+                                _selectedMonth != null
+                                    ? DateFormat('MMM yyyy').format(_selectedMonth!)
+                                    : 'Month',
                                 style: const TextStyle(
                                   color: Colors.black,
                                   fontSize: 12,
                                 ),
-                                overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            const Icon(
-                              Icons.arrow_drop_down,
-                              color: Colors.black,
-                              size: 16,
+                            const SizedBox(width: 4),
+                            OutlinedButton.icon(
+                              style: ButtonStyle(
+                                padding: MaterialStateProperty.all(
+                                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                ),
+                                foregroundColor: MaterialStateProperty.all(
+                                  Colors.black,
+                                ),
+                                minimumSize: MaterialStateProperty.all(const Size(0, 32)),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              onPressed: _selectDate,
+                              icon: const Icon(
+                                Icons.calendar_today,
+                                color: Colors.black,
+                                size: 16,
+                              ),
+                              label: Text(
+                                _selectedDate != null
+                                    ? DateFormat('MMM dd, yyyy').format(_selectedDate!)
+                                    : 'Date',
+                                style: const TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            OutlinedButton.icon(
+                              style: ButtonStyle(
+                                padding: MaterialStateProperty.all(
+                                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                ),
+                                foregroundColor: MaterialStateProperty.all(
+                                  Colors.black,
+                                ),
+                                minimumSize: MaterialStateProperty.all(const Size(0, 32)),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              onPressed: _selectDateRange,
+                              icon: const Icon(
+                                Icons.date_range,
+                                color: Colors.black,
+                                size: 16,
+                              ),
+                              label: Text(
+                                _startDate != null || _endDate != null
+                                    ? '${_startDate != null ? DateFormat('MMM dd').format(_startDate!) : 'Start'} - ${_endDate != null ? DateFormat('MMM dd').format(_endDate!) : 'End'}'
+                                    : 'Date Range',
+                                style: const TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            PopupMenuButton<String>(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.person,
+                                      color: Colors.black,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        _selectedPaidBy,
+                                        style: const TextStyle(
+                                          color: Colors.black,
+                                          fontSize: 12,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const Icon(
+                                      Icons.arrow_drop_down,
+                                      color: Colors.black,
+                                      size: 16,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              itemBuilder: (context) {
+                                return _getPaidByOptions().map((option) {
+                                  return PopupMenuItem<String>(
+                                    value: option,
+                                    child: Text(option),
+                                  );
+                                }).toList();
+                              },
+                              onSelected: (value) {
+                                setState(() {
+                                  _selectedPaidBy = value;
+                                });
+                                _applyFilters();
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            PopupMenuButton<String>(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.shopping_cart,
+                                      color: Colors.black,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        _filterOneTimePurchase == null
+                                            ? 'All'
+                                            : _filterOneTimePurchase == true
+                                                ? 'One-Time'
+                                                : 'Recurring',
+                                        style: const TextStyle(
+                                          color: Colors.black,
+                                          fontSize: 12,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const Icon(
+                                      Icons.arrow_drop_down,
+                                      color: Colors.black,
+                                      size: 16,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              itemBuilder: (context) {
+                                return [
+                                  const PopupMenuItem(
+                                    value: 'all',
+                                    child: Text('All'),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'oneTime',
+                                    child: Text('One-Time Only'),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'recurring',
+                                    child: Text('Recurring Only'),
+                                  ),
+                                ];
+                              },
+                              onSelected: (value) {
+                                setState(() {
+                                  if (value == 'all') {
+                                    _filterOneTimePurchase = null;
+                                  } else if (value == 'oneTime') {
+                                    _filterOneTimePurchase = true;
+                                  } else {
+                                    _filterOneTimePurchase = false;
+                                  }
+                                });
+                                _applyFilters();
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            PopupMenuButton<String>(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      _sortBy == 'price' ? Icons.attach_money : Icons.calendar_today,
+                                      color: Colors.black,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        _sortBy == 'price'
+                                            ? (_sortAscending ? 'Price ↑' : 'Price ↓')
+                                            : (_sortAscending ? 'Date ↑' : 'Date ↓'),
+                                        style: const TextStyle(
+                                          color: Colors.black,
+                                          fontSize: 12,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    const Icon(
+                                      Icons.arrow_drop_down,
+                                      color: Colors.black,
+                                      size: 16,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              itemBuilder: (context) {
+                                return [
+                                  const PopupMenuItem(
+                                    value: 'date_desc',
+                                    child: Text('Date (Newest First)'),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'date_asc',
+                                    child: Text('Date (Oldest First)'),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'price_desc',
+                                    child: Text('Price (Highest First)'),
+                                  ),
+                                  const PopupMenuItem(
+                                    value: 'price_asc',
+                                    child: Text('Price (Lowest First)'),
+                                  ),
+                                ];
+                              },
+                              onSelected: (value) {
+                                setState(() {
+                                  if (value == 'date_desc') {
+                                    _sortBy = 'date';
+                                    _sortAscending = false;
+                                  } else if (value == 'date_asc') {
+                                    _sortBy = 'date';
+                                    _sortAscending = true;
+                                  } else if (value == 'price_desc') {
+                                    _sortBy = 'price';
+                                    _sortAscending = false;
+                                  } else if (value == 'price_asc') {
+                                    _sortBy = 'price';
+                                    _sortAscending = true;
+                                  }
+                                });
+                                _applyFilters();
+                              },
                             ),
                           ],
                         ),
                       ),
-                      itemBuilder: (context) {
-                        return [
-                          const PopupMenuItem(
-                            value: 'all',
-                            child: Text('All'),
-                          ),
-                          const PopupMenuItem(
-                            value: 'oneTime',
-                            child: Text('One-Time Only'),
-                          ),
-                          const PopupMenuItem(
-                            value: 'recurring',
-                            child: Text('Recurring Only'),
-                          ),
-                        ];
-                      },
-                      onSelected: (value) {
-                        setState(() {
-                          if (value == 'all') {
-                            _filterOneTimePurchase = null;
-                          } else if (value == 'oneTime') {
-                            _filterOneTimePurchase = true;
-                          } else {
-                            _filterOneTimePurchase = false;
-                          }
-                        });
-                        _applyFilters();
-                      },
-                    ),
-                    const SizedBox(width: 4),
-                    InkWell(
-                      onTap: _clearFilters,
-                      child: const Padding(
-                        padding: EdgeInsets.all(4),
-                        child: Icon(Icons.clear, size: 18),
+                      // Fixed Clear Button
+                      InkWell(
+                        onTap: _clearFilters,
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          child: const Icon(Icons.clear, size: 18),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 // Total Amount
                 if (_filteredExpenses.isNotEmpty)

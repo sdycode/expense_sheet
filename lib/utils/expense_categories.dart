@@ -3,6 +3,7 @@ class _ExpenseCategories {
     'Milk',
     'Vegetables',
     'Petrol',
+    "Outside Food",
     'Travel Cab Auto',
     'Clothes - Fashion',
     'Food & Groceries',
