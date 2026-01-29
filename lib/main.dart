@@ -7,6 +7,7 @@ import 'models/expense.dart';
 import 'services/firebase_auth_service.dart';
 import 'services/google_sheets_service.dart';
 import 'services/spreadsheet_storage_service.dart';
+import 'services/firebase_database_service.dart';
 import 'screens/spreadsheet_selection_screen.dart';
 import 'utils/expense_categories.dart';
 
@@ -65,6 +66,8 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
   final FirebaseAuthService _authService = FirebaseAuthService();
   final GoogleSheetsService _sheetsService = GoogleSheetsService();
   final SpreadsheetStorageService _storageService = SpreadsheetStorageService();
+  final FirebaseDatabaseService _firebaseDatabaseService =
+      FirebaseDatabaseService();
 
   final _formKey = GlobalKey<FormState>();
   final _labelController = TextEditingController();
@@ -169,7 +172,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
   }
 
   Future<void> _loadPersonNames() async {
-    if (!_isSignedIn || _spreadsheetIdController.text.trim().isEmpty) {
+    if (!_isSignedIn || _userEmail == null) {
       setState(() {
         _isLoadingPersonNames = false;
       });
@@ -179,9 +182,12 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
       _isLoadingPersonNames = true;
     });
     try {
-      final names = await _sheetsService.getPersonNames();
-      debugPrint('Person names: $names');
-      // Remove duplicates
+      // Fetch from Firebase Database instead of Google Sheets
+      final names = await _firebaseDatabaseService.getPaidByPersons(
+        _userEmail!,
+      );
+      debugPrint('Person names from Firebase: $names');
+      // Remove duplicates and sort
       final uniqueNames = names.toSet().toList()..sort();
       setState(() {
         _personNames = uniqueNames;
@@ -813,7 +819,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
     final label = expense.label.toLowerCase();
     final note = (expense.note ?? '').toLowerCase();
     final combinedText = '$label $note';
-    
+
     // Check for keywords in label or notes
     if (combinedText.contains('milk')) {
       return 'Milk';
@@ -822,7 +828,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
     } else if (combinedText.contains('petrol')) {
       return 'Petrol';
     }
-    
+
     // Return null if no match
     return null;
   }
@@ -836,11 +842,11 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
     }
 
     setState(() => _isLoadingExpenses = true);
-    
+
     try {
       // Get all expenses
       final expenses = await _sheetsService.getExpenses();
-      
+
       // Filter expenses that have keywords (Milk, Petrol, Vegetables) in label or notes
       final expensesToUpdate = expenses.where((expense) {
         final newCategory = _getCategoryFromLabelAndNotes(expense);
@@ -863,13 +869,13 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
 
   Future<void> _updateExpenseCategory(Expense expense) async {
     final newCategory = _getCategoryFromLabelAndNotes(expense);
-    
+
     if (newCategory == null || newCategory == expense.category) {
       return;
     }
 
     setState(() => _isLoading = true);
-    
+
     try {
       final updatedExpense = Expense(
         id: expense.id,
@@ -882,19 +888,21 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
         paidBy: expense.paidBy,
         isOneTimePurchase: expense.isOneTimePurchase,
       );
-      
+
       await _sheetsService.updateExpense(updatedExpense);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Updated "${expense.label}" to category "$newCategory"'),
+            content: Text(
+              'Updated "${expense.label}" to category "$newCategory"',
+            ),
             backgroundColor: Colors.green,
             duration: const Duration(seconds: 2),
           ),
         );
       }
-      
+
       // Reload the list
       await _loadExpensesToUpdate();
     } catch (e) {
@@ -918,13 +926,13 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
     }
 
     setState(() => _isLoading = true);
-    
+
     try {
       int updatedCount = 0;
-      
+
       for (var expense in _expensesToUpdate) {
         final newCategory = _getCategoryFromLabelAndNotes(expense);
-        
+
         if (newCategory != null && newCategory != expense.category) {
           final updatedExpense = Expense(
             id: expense.id,
@@ -937,7 +945,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
             paidBy: expense.paidBy,
             isOneTimePurchase: expense.isOneTimePurchase,
           );
-          
+
           await _sheetsService.updateExpense(updatedExpense);
           updatedCount++;
         }
@@ -952,7 +960,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
           ),
         );
       }
-      
+
       // Reload the list
       await _loadExpensesToUpdate();
     } catch (e) {
@@ -1005,9 +1013,25 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
     );
 
     if (result != null && result.isNotEmpty) {
+      if (_userEmail == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('User email not available. Please sign in again.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+
       setState(() => _isLoading = true);
       try {
-        final success = await _sheetsService.addPersonName(result);
+        // Add to Firebase Database instead of Google Sheets
+        final success = await _firebaseDatabaseService.addPaidByPerson(
+          _userEmail!,
+          result,
+        );
         if (success) {
           // Reload person names
           await _loadPersonNames();
@@ -1020,7 +1044,9 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Person "$result" added successfully!'),
+                content: Text(
+                  'Person "$result" added successfully to Firebase!',
+                ),
                 backgroundColor: Colors.green,
               ),
             );
@@ -1402,36 +1428,34 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                         ),
                       ),
                     ),
-                   
-                
                   ],
                 ),
                 const SizedBox(height: 16),
-    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                      
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.shopping_cart, size: 20),
-                          const SizedBox(width: 8),
-                          const Text(
-                            'One Time',
-                            style: TextStyle(fontSize: 14),
-                          ),
-                          const SizedBox(width: 8),
-                          Switch(
-                            value: _isOneTimePurchase,
-                            onChanged: (value) {
-                              setState(() {
-                                _isOneTimePurchase = value;
-                              });
-                            },
-                          ),
-                        ],
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 0,
+                  ),
+
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.shopping_cart, size: 20),
+                      const SizedBox(width: 8),
+                      const Text('One Time', style: TextStyle(fontSize: 14)),
+                      const SizedBox(width: 8),
+                      Switch(
+                        value: _isOneTimePurchase,
+                        onChanged: (value) {
+                          setState(() {
+                            _isOneTimePurchase = value;
+                          });
+                        },
                       ),
-                    ),
-                    const SizedBox(height: 16),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
                 // Note (Optional)
                 TextFormField(
                   controller: _noteController,
@@ -1575,7 +1599,9 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                 ),
                 const SizedBox(height: 16),
                 // Update Categories Section
-                if (_isSignedIn && _spreadsheetIdController.text.trim().isNotEmpty && false) ...[
+                if (_isSignedIn &&
+                    _spreadsheetIdController.text.trim().isNotEmpty &&
+                    false) ...[
                   Card(
                     color: Colors.orange[50],
                     child: Padding(
@@ -1593,14 +1619,19 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                                   fontSize: 12,
                                   fontWeight: FontWeight.bold,
                                 ),
-                              ), IconButton(
+                              ),
+                              IconButton(
                                 icon: const Icon(Icons.refresh),
-                                onPressed: _isLoadingExpenses ? null : _loadExpensesToUpdate,
+                                onPressed: _isLoadingExpenses
+                                    ? null
+                                    : _loadExpensesToUpdate,
                                 tooltip: 'Refresh List',
                               ),
                               if (_expensesToUpdate.isNotEmpty)
                                 ElevatedButton.icon(
-                                  onPressed: _isLoading ? null : _updateAllCategories,
+                                  onPressed: _isLoading
+                                      ? null
+                                      : _updateAllCategories,
                                   icon: const Icon(Icons.update),
                                   label: const Text('Update All'),
                                   style: ElevatedButton.styleFrom(
@@ -1608,8 +1639,8 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                                     foregroundColor: Colors.white,
                                   ),
                                 ),
+
                               // const Spacer(),
-                             
                             ],
                           ),
                           const SizedBox(height: 12),
@@ -1633,36 +1664,46 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                                 itemCount: _expensesToUpdate.length,
                                 itemBuilder: (context, index) {
                                   final expense = _expensesToUpdate[index];
-                                  final oldCategory = expense.category ?? 'None';
-                                  final newCategory = _getCategoryFromLabelAndNotes(expense) ?? 'None';
-                                  
+                                  final oldCategory =
+                                      expense.category ?? 'None';
+                                  final newCategory =
+                                      _getCategoryFromLabelAndNotes(expense) ??
+                                      'None';
+
                                   return Card(
                                     margin: const EdgeInsets.only(bottom: 8),
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Row(
                                             children: [
                                               Expanded(
                                                 child: Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
                                                   children: [
                                                     Text(
                                                       expense.label,
                                                       style: const TextStyle(
-                                                        fontWeight: FontWeight.bold,
+                                                        fontWeight:
+                                                            FontWeight.bold,
                                                         fontSize: 15,
                                                       ),
                                                     ),
-                                                    if (expense.note != null && expense.note!.isNotEmpty) ...[
+                                                    if (expense.note != null &&
+                                                        expense
+                                                            .note!
+                                                            .isNotEmpty) ...[
                                                       const SizedBox(height: 4),
                                                       Text(
                                                         'Note: ${expense.note}',
                                                         style: TextStyle(
                                                           fontSize: 12,
-                                                          color: Colors.grey[600],
+                                                          color:
+                                                              Colors.grey[600],
                                                         ),
                                                       ),
                                                     ],
@@ -1681,13 +1722,17 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                                           const SizedBox(height: 8),
                                           Row(
                                             children: [
-                                              const Text('Current Category: ', style: TextStyle(fontSize: 12)),
+                                              const Text(
+                                                'Current Category: ',
+                                                style: TextStyle(fontSize: 12),
+                                              ),
                                               Text(
                                                 oldCategory,
                                                 style: TextStyle(
                                                   fontSize: 12,
                                                   color: Colors.red[700],
-                                                  decoration: TextDecoration.lineThrough,
+                                                  decoration: TextDecoration
+                                                      .lineThrough,
                                                 ),
                                               ),
                                             ],
@@ -1695,7 +1740,10 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                                           const SizedBox(height: 4),
                                           Row(
                                             children: [
-                                              const Text('New Category: ', style: TextStyle(fontSize: 12)),
+                                              const Text(
+                                                'New Category: ',
+                                                style: TextStyle(fontSize: 12),
+                                              ),
                                               Text(
                                                 newCategory,
                                                 style: TextStyle(
@@ -1710,13 +1758,25 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                                           Align(
                                             alignment: Alignment.centerRight,
                                             child: ElevatedButton.icon(
-                                              onPressed: _isLoading ? null : () => _updateExpenseCategory(expense),
-                                              icon: const Icon(Icons.update, size: 16),
+                                              onPressed: _isLoading
+                                                  ? null
+                                                  : () =>
+                                                        _updateExpenseCategory(
+                                                          expense,
+                                                        ),
+                                              icon: const Icon(
+                                                Icons.update,
+                                                size: 16,
+                                              ),
                                               label: const Text('Update'),
                                               style: ElevatedButton.styleFrom(
                                                 backgroundColor: Colors.orange,
                                                 foregroundColor: Colors.white,
-                                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 12,
+                                                      vertical: 8,
+                                                    ),
                                               ),
                                             ),
                                           ),
@@ -1772,7 +1832,7 @@ class _CategoryUpdateDialogState extends State<_CategoryUpdateDialog> {
     try {
       for (var expense in widget.expenses) {
         final newCategory = widget.mapCategory(expense.category);
-        
+
         if (newCategory != expense.category) {
           final updatedExpense = Expense(
             id: expense.id,
@@ -1785,7 +1845,7 @@ class _CategoryUpdateDialogState extends State<_CategoryUpdateDialog> {
             paidBy: expense.paidBy,
             isOneTimePurchase: expense.isOneTimePurchase,
           );
-          
+
           await widget.sheetsService.updateExpense(updatedExpense);
           setState(() {
             _updatedCount++;
@@ -1858,8 +1918,9 @@ class _CategoryUpdateDialogState extends State<_CategoryUpdateDialog> {
                 itemBuilder: (context, index) {
                   final expense = widget.expenses[index];
                   final oldCategory = expense.category ?? 'None';
-                  final newCategory = widget.mapCategory(expense.category) ?? 'None';
-                  
+                  final newCategory =
+                      widget.mapCategory(expense.category) ?? 'None';
+
                   return Card(
                     margin: const EdgeInsets.only(bottom: 8),
                     child: ListTile(
@@ -1874,7 +1935,10 @@ class _CategoryUpdateDialogState extends State<_CategoryUpdateDialog> {
                           const SizedBox(height: 4),
                           Row(
                             children: [
-                              const Text('Old: ', style: TextStyle(fontSize: 11)),
+                              const Text(
+                                'Old: ',
+                                style: TextStyle(fontSize: 11),
+                              ),
                               Text(
                                 oldCategory,
                                 style: TextStyle(
@@ -1888,7 +1952,10 @@ class _CategoryUpdateDialogState extends State<_CategoryUpdateDialog> {
                           const SizedBox(height: 2),
                           Row(
                             children: [
-                              const Text('New: ', style: TextStyle(fontSize: 11)),
+                              const Text(
+                                'New: ',
+                                style: TextStyle(fontSize: 11),
+                              ),
                               Text(
                                 newCategory,
                                 style: TextStyle(
