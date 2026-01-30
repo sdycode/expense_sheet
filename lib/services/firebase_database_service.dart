@@ -149,7 +149,7 @@ class FirebaseDatabaseService {
         final key = entry.key.toString();
         final val = entry.value;
         if (val is Map) {
-          final raw = Map<dynamic, dynamic>.from(val as Map);
+          final raw = Map<dynamic, dynamic>.from(val);
           final eventData = Map<dynamic, dynamic>.from(raw)
             ..remove('expense_ids');
           if (eventData.containsKey('name')) {
@@ -216,6 +216,20 @@ class FirebaseDatabaseService {
       return data.keys.map((e) => e.toString()).toList();
     } catch (e) {
       debugPrint('Error getting event ids for expense: $e');
+      return [];
+    }
+  }
+
+  /// Returns expense ids that are linked to the given event (from events/{eventId}/expense_ids).
+  Future<List<String>> getExpenseIdsForEvent(String userEmail, String eventId) async {
+    try {
+      final ref = _getEventsRef(userEmail).child(eventId).child('expense_ids');
+      final snapshot = await ref.get();
+      if (!snapshot.exists || snapshot.value == null) return [];
+      final data = snapshot.value as Map<dynamic, dynamic>;
+      return data.keys.map((e) => e.toString()).toList();
+    } catch (e) {
+      debugPrint('Error getting expense ids for event: $e');
       return [];
     }
   }

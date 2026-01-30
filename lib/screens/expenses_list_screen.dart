@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import '../models/expense.dart';
+import '../models/event.dart';
 import '../services/google_sheets_service.dart';
+import '../services/services_module.dart';
 import '../utils/expense_categories.dart';
 import 'edit_expense_screen.dart';
 
@@ -37,6 +39,16 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
   bool _hasUpdatedCategories = false;
+
+  // Event assignment mode: add/remove expenses from an event
+  bool _eventAssignmentMode = false;
+  Event? _selectedEvent;
+  Set<String> _expenseIdsInEvent = {};
+  Set<String> _pendingAdds = {};
+  Set<String> _pendingRemoves = {};
+  bool _isLoadingEventIds = false;
+  bool _isSavingEventAssignments = false;
+  final FirebaseDatabaseService _firebaseDb = FirebaseDatabaseService();
 
   @override
   void initState() {
@@ -578,7 +590,177 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
   }
 
   double _getTotalAmount() {
+    if (_eventAssignmentMode && _selectedEvent != null) {
+      return _filteredExpenses
+          .where((e) => _isExpenseInEvent(e.id))
+          .fold(0.0, (sum, expense) => sum + expense.price);
+    }
     return _filteredExpenses.fold(0.0, (sum, expense) => sum + expense.price);
+  }
+
+  String? get _userEmail => FirebaseAuthService().currentUser?.email;
+
+  bool _isExpenseInEvent(String expenseId) {
+    final inBase = _expenseIdsInEvent.contains(expenseId);
+    final added = _pendingAdds.contains(expenseId);
+    final removed = _pendingRemoves.contains(expenseId);
+    return (inBase || added) && !removed;
+  }
+
+  void _onAddExpenseToEvent(String expenseId) {
+    setState(() {
+      _pendingRemoves.remove(expenseId);
+      _pendingAdds.add(expenseId);
+    });
+  }
+
+  void _onRemoveExpenseFromEvent(String expenseId) {
+    setState(() {
+      _pendingAdds.remove(expenseId);
+      _pendingRemoves.add(expenseId);
+    });
+  }
+
+  Future<void> _openEventListDialog() async {
+    final email = _userEmail;
+    if (email == null || email.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Sign in to manage events'), backgroundColor: Colors.orange),
+        );
+      }
+      return;
+    }
+    List<Event> events;
+    try {
+      events = await _firebaseDb.getEvents(email);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading events: $e'), backgroundColor: Colors.red),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+    if (events.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No events yet. Create events first.'), backgroundColor: Colors.orange),
+      );
+      return;
+    }
+    final chosen = await showDialog<Event>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Select Event'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: events
+                .map((e) => ListTile(
+                      title: Text(e.name),
+                      onTap: () => Navigator.pop(ctx, e),
+                    ))
+                .toList(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (chosen != null) {
+      setState(() {
+        _selectedEvent = chosen;
+        _eventAssignmentMode = true;
+        _pendingAdds.clear();
+        _pendingRemoves.clear();
+      });
+      _loadExpenseIdsForSelectedEvent();
+    }
+  }
+
+  Future<void> _loadExpenseIdsForSelectedEvent() async {
+    final email = _userEmail;
+    final event = _selectedEvent;
+    if (email == null || event == null) return;
+    setState(() => _isLoadingEventIds = true);
+    try {
+      final ids = await _firebaseDb.getExpenseIdsForEvent(email, event.id);
+      if (mounted) {
+        setState(() {
+          _expenseIdsInEvent = ids.toSet();
+          _isLoadingEventIds = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoadingEventIds = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading event expenses: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  void _exitEventAssignmentMode() {
+    setState(() {
+      _eventAssignmentMode = false;
+      _selectedEvent = null;
+      _expenseIdsInEvent = {};
+      _pendingAdds = {};
+      _pendingRemoves = {};
+    });
+  }
+
+  Future<void> _saveEventAssignments() async {
+    final email = _userEmail;
+    final event = _selectedEvent;
+    if (email == null || event == null) return;
+    final toAdd = _pendingAdds.toList();
+    final toRemove = _pendingRemoves.toList();
+    if (toAdd.isEmpty && toRemove.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No changes to save')),
+        );
+      }
+      return;
+    }
+    setState(() => _isSavingEventAssignments = true);
+    try {
+      for (final expenseId in toAdd) {
+        final current = await _firebaseDb.getEventIdsForExpense(email, expenseId);
+        final updated = [...current, event.id].toSet().toList();
+        await _firebaseDb.setExpenseEvents(email, expenseId, updated);
+      }
+      for (final expenseId in toRemove) {
+        final current = await _firebaseDb.getEventIdsForExpense(email, expenseId);
+        final updated = current.where((id) => id != event.id).toList();
+        await _firebaseDb.setExpenseEvents(email, expenseId, updated);
+      }
+      if (mounted) {
+        setState(() {
+          _pendingAdds.clear();
+          _pendingRemoves.clear();
+          _isSavingEventAssignments = false;
+        });
+        _loadExpenseIdsForSelectedEvent();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Event assignments updated'), backgroundColor: Colors.green),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSavingEventAssignments = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   @override
@@ -617,11 +799,17 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
           onChanged: _onSearchChanged,
         ),
         actions: [
-          // IconButton(
-          //   icon: const Icon(Icons.update),
-          //   onPressed: _updateExpenseCategories,
-          //   tooltip: 'Update Categories',
-          // ),
+          IconButton(
+            icon: const Icon(Icons.event),
+            onPressed: _openEventListDialog,
+            tooltip: 'Add expenses to event',
+          ),
+          if (_eventAssignmentMode)
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: _exitEventAssignmentMode,
+              tooltip: 'Exit event mode',
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadExpenses,
@@ -1046,6 +1234,27 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
               ],
             ),
           ),
+          // Event mode banner
+          if (_eventAssignmentMode && _selectedEvent != null)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              color: Theme.of(context).colorScheme.primaryContainer,
+              child: Row(
+                children: [
+                  Icon(Icons.event, size: 20, color: Theme.of(context).colorScheme.onPrimaryContainer),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Event: ${_selectedEvent!.name} — tap +/− next to price',
+                      style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onPrimaryContainer),
+                    ),
+                  ),
+                  if (_isLoadingEventIds)
+                    const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                ],
+              ),
+            ),
           // Expenses List
           Expanded(
             child: _isLoading
@@ -1077,7 +1286,12 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                     onRefresh: _loadExpenses,
                     child: ListView.builder(
                       itemCount: _filteredExpenses.length,
-                      padding: const EdgeInsets.all(8),
+                      padding: EdgeInsets.only(
+                        left: 8,
+                        right: 8,
+                        top: 8,
+                        bottom: _eventAssignmentMode ? 72 : 8,
+                      ),
                       itemBuilder: (context, index) {
                         final expense = _filteredExpenses[index];
                         return _ExpenseCard(
@@ -1085,11 +1299,38 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                           onEdit: () => _editExpense(expense),
                           onDelete: () => _deleteExpense(expense),
                           isSearching: _searchQuery.isNotEmpty,
+                          eventAssignmentMode: _eventAssignmentMode,
+                          isInEvent: _isExpenseInEvent(expense.id),
+                          onAddToEvent: () => _onAddExpenseToEvent(expense.id),
+                          onRemoveFromEvent: () => _onRemoveExpenseFromEvent(expense.id),
                         );
                       },
                     ),
                   ),
           ),
+          // Update button when in event mode
+          if (_eventAssignmentMode && _selectedEvent != null)
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: (_pendingAdds.isEmpty && _pendingRemoves.isEmpty) || _isSavingEventAssignments
+                        ? null
+                        : _saveEventAssignments,
+                    icon: _isSavingEventAssignments
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.save),
+                    label: Text(_isSavingEventAssignments ? 'Saving...' : 'Update event assignments'),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1222,12 +1463,20 @@ class _ExpenseCard extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final bool isSearching;
+  final bool eventAssignmentMode;
+  final bool isInEvent;
+  final VoidCallback? onAddToEvent;
+  final VoidCallback? onRemoveFromEvent;
 
   const _ExpenseCard({
     required this.expense,
     required this.onEdit,
     required this.onDelete,
     required this.isSearching,
+    this.eventAssignmentMode = false,
+    this.isInEvent = false,
+    this.onAddToEvent,
+    this.onRemoveFromEvent,
   });
 
   void _showDetailsDialog(BuildContext context) {
@@ -1452,14 +1701,37 @@ class _ExpenseCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              // Price
-              Text(
-                '₹${expense.price.toStringAsFixed(0)}',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
+              // Price and +/- when in event mode
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (eventAssignmentMode) ...[
+                    IconButton(
+                      icon: Icon(Icons.remove_circle_outline, size: 22, color: isInEvent ? Colors.red : Colors.grey),
+                      onPressed: isInEvent ? onRemoveFromEvent : null,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  Text(
+                    '₹${expense.price.toStringAsFixed(0)}',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  if (eventAssignmentMode) ...[
+                    const SizedBox(width: 4),
+                    IconButton(
+                      icon: Icon(Icons.add_circle_outline, size: 22, color: !isInEvent ? Colors.green : Colors.grey),
+                      onPressed: !isInEvent ? onAddToEvent : null,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    ),
+                  ],
+                ],
               ),
             ],
           ),
