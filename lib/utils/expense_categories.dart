@@ -1,8 +1,8 @@
 class _ExpenseCategories {
   static const List<String> categories = [
     'Milk',
-    'Vegetables',
-    'Petrol',
+
+    'Petrol',    'Vegetables',
     "Outside Food",
     'Travel Cab Auto',
     'Clothes - Fashion',

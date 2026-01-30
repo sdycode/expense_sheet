@@ -305,16 +305,30 @@ class GoogleSheetsService {
 
   DateTime _parseDate(String dateStr) {
     try {
-      // Try ISO format first
-      if (dateStr.contains('T')) {
-        return DateTime.parse(dateStr);
+      String s = dateStr.trim();
+      if (s.isEmpty) return DateTime.now();
+
+      // Try parsing as-is first
+      try {
+        return DateTime.parse(s);
+      } catch (_) {}
+
+      // Normalize "2026-01-18 6:04:33" -> "2026-01-18T06:04:33" (space to T, pad time parts)
+      final spaceIndex = s.indexOf(' ');
+      if (spaceIndex > 0) {
+        final datePart = s.substring(0, spaceIndex);
+        final timePart = s.substring(spaceIndex + 1).trim();
+        if (timePart.isNotEmpty) {
+          final timeSegments = timePart.split(':');
+          final padded = timeSegments.map((e) => e.padLeft(2, '0')).join(':');
+          s = '${datePart}T$padded';
+        } else {
+          s = datePart;
+        }
+        return DateTime.parse(s);
       }
-      // Try date only format (YYYY-MM-DD)
-      if (dateStr.contains('-')) {
-        return DateTime.parse(dateStr);
-      }
-      // Try other formats
-      return DateTime.parse(dateStr);
+
+      return DateTime.parse(s);
     } catch (e) {
       debugPrint('Error parsing date: $dateStr, using current date');
       return DateTime.now();
