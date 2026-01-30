@@ -18,7 +18,7 @@ class _ExpenseCategories {
     'Home & Maintenance',
     'Travel',
     'Gifts & Donations',
-    'Other',
+    
   ];
 }
 

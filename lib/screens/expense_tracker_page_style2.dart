@@ -1,4 +1,7 @@
 import 'package:expensesheet/models/expense.dart';
+import 'package:expensesheet/models/frequent_expense_item.dart';
+import 'package:expensesheet/screens/events_page.dart';
+import 'package:expensesheet/screens/frequent_expense_items_page.dart';
 import 'package:expensesheet/screens/spreadsheet_selection_screen.dart';
 import 'package:expensesheet/services/services_module.dart';
 import 'package:expensesheet/utils/expense_categories.dart';
@@ -41,6 +44,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   bool _isLoadingPersonNames = false;
   List<Expense> _expensesToUpdate = [];
   bool _isLoadingExpenses = false;
+  List<FrequentExpenseItem> _frequentItems = [];
 
   @override
   void initState() {
@@ -110,7 +114,39 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       await _initializeSheetsApi();
       _loadSpreadsheetNameIfExists();
       _loadPersonNames();
+      _loadFrequentItems();
     }
+  }
+
+  Future<void> _loadFrequentItems() async {
+    if (!_isSignedIn || _userEmail == null) {
+      setState(() => _frequentItems = []);
+      return;
+    }
+    try {
+      final all = await _firebaseDatabaseService.getFrequentExpenseItems(_userEmail!);
+      setState(() => _frequentItems = all.where((e) => e.show).toList());
+    } catch (e) {
+      debugPrint('Error loading frequent items: $e');
+      setState(() => _frequentItems = []);
+    }
+  }
+
+  void _applyFrequentItem(FrequentExpenseItem item) {
+    _labelController.text = item.label;
+    _priceController.text = item.price.toStringAsFixed(0);
+    setState(() => _selectedCategory = item.category);
+  }
+
+  Future<void> _openFrequentExpenseItemsPage() async {
+    if (_userEmail == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => FrequentExpenseItemsPage(userEmail: _userEmail!),
+      ),
+    );
+    await _loadFrequentItems();
   }
 
   Future<void> _loadPersonNames() async {
@@ -193,6 +229,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
               _isSignedIn = true;
               _userEmail = result.firebaseUser!.email;
             });
+            _loadFrequentItems();
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
@@ -1153,11 +1190,65 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 ),
 
               if (_isSignedIn) ...[
-                const Text(
-                  'Add Expense',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+               
+                 Row(
+                  children: [ 
+                //     const Text(
+                //   'Add Expense',
+                //   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                // ),
+
+                     OutlinedButton.icon(
+                      onPressed: () {
+                        if (_userEmail == null) return;
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => EventsPage(userEmail: _userEmail!),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.star, size: 18),
+                      label: const Text('Events'),
+                    ),Spacer(),OutlinedButton.icon(
+                      onPressed: _openFrequentExpenseItemsPage,
+                      icon: const Icon(Icons.star, size: 18),
+                      label: const Text('Frequents'),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 4),
+
+                // Frequent items: button + scrollable row
+               
+                if (_frequentItems.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Tap to fill',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 4),
+                  SizedBox(
+                    height: 44,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _frequentItems.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) {
+                        final item = _frequentItems[index];
+                        return ActionChip(
+                          label: Text(
+                            '${item.label} • ₹${item.price.toStringAsFixed(0)}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          onPressed: () => _applyFrequentItem(item),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ] else
+                  const SizedBox(height: 8),
 
                 // Label and Price - no change
                 Row(
@@ -1208,8 +1299,8 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-
+                const SizedBox(height: 6),
+Divider(), const SizedBox(height: 6),
                 // Category: wrap, 3 rows max, horizontal scroll
                 const Text(
                   'Category (Optional)',
@@ -1262,10 +1353,21 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                   ),
                 ),
                 const SizedBox(height: 8),
-
+Divider(),
                 // Date (small "30 Jan") + One time switch in one row
                 Row(
                   children: [
+                    
+                    const SizedBox(width: 16),
+                    const Text('One Time', style: TextStyle(fontSize: 14)),
+                    const SizedBox(width: 8),
+                    Switch(
+                      value: _isOneTimePurchase,
+                      onChanged: (value) {
+                        setState(() => _isOneTimePurchase = value);
+                      },
+                    ),
+                    Spacer(),
                     InkWell(
                       onTap: _selectDate,
                       child: Container(
@@ -1285,15 +1387,6 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                    const Text('One Time', style: TextStyle(fontSize: 14)),
-                    const SizedBox(width: 8),
-                    Switch(
-                      value: _isOneTimePurchase,
-                      onChanged: (value) {
-                        setState(() => _isOneTimePurchase = value);
-                      },
                     ),
                   ],
                 ),

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import '../models/expense.dart';
+import '../models/event.dart';
 import '../services/google_sheets_service.dart';
+import '../services/services_module.dart';
 import '../utils/expense_categories.dart';
 
 class EditExpenseScreen extends StatefulWidget {
@@ -31,6 +33,10 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
   bool _isLoading = false;
   bool _isLoadingPersonNames = true;
   List<String> _personNames = [];
+  final FirebaseDatabaseService _firebaseDb = FirebaseDatabaseService();
+  List<Event> _events = [];
+  Set<String> _selectedEventIds = {};
+  bool _isLoadingEvents = true;
 
   @override
   void initState() {
@@ -51,6 +57,39 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
     _selectedDate = widget.expense.expenseDate;
     _isOneTimePurchase = widget.expense.isOneTimePurchase;
     _loadPersonNames();
+    _loadEvents();
+  }
+
+  Future<void> _loadEvents() async {
+    final userEmail = FirebaseAuthService().currentUser?.email;
+    if (userEmail == null || userEmail.isEmpty) {
+      setState(() {
+        _events = [];
+        _selectedEventIds = {};
+        _isLoadingEvents = false;
+      });
+      return;
+    }
+    try {
+      final events = await _firebaseDb.getEvents(userEmail);
+      final eventIds = await _firebaseDb.getEventIdsForExpense(userEmail, widget.expense.id);
+      if (mounted) {
+        setState(() {
+          _events = events;
+          _selectedEventIds = eventIds.toSet();
+          _isLoadingEvents = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading events: $e');
+      if (mounted) {
+        setState(() {
+          _events = [];
+          _selectedEventIds = {};
+          _isLoadingEvents = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadPersonNames() async {
@@ -127,6 +166,12 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
       paidBy: _selectedPaidBy,
       isOneTimePurchase: _isOneTimePurchase,
     );
+
+    // Save event links in Firebase (expense can belong to multiple events)
+    final userEmail = FirebaseAuthService().currentUser?.email;
+    if (userEmail != null && userEmail.isNotEmpty) {
+      _firebaseDb.setExpenseEvents(userEmail, widget.expense.id, _selectedEventIds.toList());
+    }
 
     // Close screen immediately for better UX
     if (mounted) {
@@ -421,6 +466,49 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
                 ),
                 maxLines: 3,
               ),
+              const SizedBox(height: 16),
+
+              // Events (multi-select: add this expense to events)
+              const Text(
+                'Events (Optional)',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 6),
+              _isLoadingEvents
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: LinearProgressIndicator(),
+                    )
+                  : _events.isEmpty
+                      ? Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Text(
+                            FirebaseAuthService().currentUser?.email == null
+                                ? 'Sign in to manage events'
+                                : 'No events yet. Create events to group this expense.',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                          ),
+                        )
+                      : Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: _events.map((event) {
+                            final selected = _selectedEventIds.contains(event.id);
+                            return FilterChip(
+                              label: Text(event.name),
+                              selected: selected,
+                              onSelected: (value) {
+                                setState(() {
+                                  if (value) {
+                                    _selectedEventIds.add(event.id);
+                                  } else {
+                                    _selectedEventIds.remove(event.id);
+                                  }
+                                });
+                              },
+                            );
+                          }).toList(),
+                        ),
               const SizedBox(height: 24),
 
               // Update Button
