@@ -2,7 +2,7 @@ import 'package:expensesheet/models/expense.dart';
 import 'package:expensesheet/models/frequent_expense_item.dart';
 import 'package:expensesheet/screens/events_page.dart';
 import 'package:expensesheet/screens/frequent_expense_items_page.dart';
-import 'package:expensesheet/screens/spreadsheet_selection_screen.dart';
+import 'package:expensesheet/screens/121212.dart';
 import 'package:expensesheet/services/services_module.dart';
 import 'package:expensesheet/utils/expense_categories.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -1357,6 +1357,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                         ),
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(6),
                         ],
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
