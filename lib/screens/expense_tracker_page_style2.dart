@@ -7,6 +7,7 @@ import 'package:expensesheet/services/services_module.dart';
 import 'package:expensesheet/utils/expense_categories.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 class ExpenseTrackerPageStyle2 extends StatefulWidget {
@@ -44,8 +45,10 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   List<Expense> _expensesToUpdate = [];
   bool _isLoadingExpenses = false;
   List<FrequentExpenseItem> _frequentItems = [];
+
   /// Label -> count from sheet; used for label suggestions (sorted by count).
   Map<String, int> _labelCountMap = {};
+  bool _labelCountMapLoadTriggered = false;
   TextEditingController? _autocompleteLabelController;
 
   @override
@@ -126,7 +129,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       return;
     }
     try {
-      final all = await _firebaseDatabaseService.getFrequentExpenseItems(_userEmail!);
+      final all = await _firebaseDatabaseService.getFrequentExpenseItems(
+        _userEmail!,
+      );
       setState(() => _frequentItems = all.where((e) => e.show).toList());
     } catch (e) {
       debugPrint('Error loading frequent items: $e');
@@ -508,7 +513,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                       return;
                     }
                     await _checkAndSaveSpreadsheet();
-                    if (mounted) Navigator.pop(context);
+                    try {
+                      if (mounted) Navigator.pop(context);
+                    } catch (e) {}
                   },
             icon: _isLoading
                 ? const SizedBox(
@@ -855,6 +862,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       setState(() {
         _expensesToUpdate = [];
         _labelCountMap = {};
+        _labelCountMapLoadTriggered = false;
       });
       return;
     }
@@ -1101,7 +1109,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       appBar: AppBar(
         title: const Text('Expense Tracker'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        
+
         actions: [
           if (_isSignedIn) ...[
             IconButton(
@@ -1205,27 +1213,46 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 ),
 
               if (_isSignedIn) ...[
-               
-                 Row(
-                  children: [ 
-                //     const Text(
-                //   'Add Expense',
-                //   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                // ),
-
-                     OutlinedButton.icon(
+                // Load label suggestions from sheet when form is shown and map is empty (once)
+                if (_labelCountMap.isEmpty &&
+                    _spreadsheetIdController.text.trim().isNotEmpty &&
+                    !_labelCountMapLoadTriggered)
+                  Builder(
+                    builder: (context) {
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (mounted &&
+                            _labelCountMap.isEmpty &&
+                            _spreadsheetIdController.text.trim().isNotEmpty &&
+                            !_labelCountMapLoadTriggered) {
+                          _labelCountMapLoadTriggered = true;
+                          _loadExpensesToUpdate();
+                        }
+                      });
+                      return const SizedBox.shrink();
+                    },
+                  ),
+                Row(
+                  children: [
+                    //     const Text(
+                    //   'Add Expense',
+                    //   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    // ),
+                    OutlinedButton.icon(
                       onPressed: () {
                         if (_userEmail == null) return;
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (context) => EventsPage(userEmail: _userEmail!),
+                            builder: (context) =>
+                                EventsPage(userEmail: _userEmail!),
                           ),
                         );
                       },
                       icon: const Icon(Icons.star, size: 18),
                       label: const Text('Events'),
-                    ),Spacer(),OutlinedButton.icon(
+                    ),
+                    Spacer(),
+                    OutlinedButton.icon(
                       onPressed: _openFrequentExpenseItemsPage,
                       icon: const Icon(Icons.star, size: 18),
                       label: const Text('Frequents'),
@@ -1235,7 +1262,6 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 const SizedBox(height: 4),
 
                 // Frequent items: button + scrollable row
-               
                 if (_frequentItems.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   const Text(
@@ -1269,6 +1295,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 Row(
                   children: [
                     Expanded(
+                      flex: 5,
                       child: Autocomplete<String>(
                         displayStringForOption: (s) => s,
                         optionsBuilder: (TextEditingValue value) {
@@ -1276,100 +1303,61 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                           List<String> keys = q.isEmpty
                               ? _labelCountMap.keys.toList()
                               : _labelCountMap.keys
-                                  .where((l) => l.toLowerCase().contains(q))
-                                  .toList();
-                          keys.sort((a, b) =>
-                              (_labelCountMap[b] ?? 0).compareTo(_labelCountMap[a] ?? 0));
+                                    .where((l) => l.toLowerCase().contains(q))
+                                    .toList();
+                          keys.sort(
+                            (a, b) => (_labelCountMap[b] ?? 0).compareTo(
+                              _labelCountMap[a] ?? 0,
+                            ),
+                          );
                           return keys;
                         },
                         onSelected: (String value) {
                           _autocompleteLabelController?.text = value;
                         },
-                        fieldViewBuilder: (
-                          context,
-                          controller,
-                          focusNode,
-                          onFieldSubmitted,
-                        ) {
-                          _autocompleteLabelController ??= controller;
-                          return TextFormField(
-                            controller: controller,
-                            focusNode: focusNode,
-                            decoration: const InputDecoration(
-                              labelText: 'Label *',
-                              hintText: 'e.g., Groceries, Lunch, etc.',
-                              border: OutlineInputBorder(),
-                              prefixIcon: Icon(Icons.label),
-                              contentPadding: EdgeInsets.all(2),
-                            ),
-                            validator: (value) {
-                              if (value == null || value.trim().isEmpty) {
-                                return 'Please enter a label';
-                              }
-                              return null;
-                            },
-                          );
-                        },
-                        optionsViewBuilder: (context, onSelected, options) {
-                          return Align(
-                            alignment: Alignment.topLeft,
-                            child: Material(
-                              elevation: 4,
-                              child: ConstrainedBox(
-                                constraints: const BoxConstraints(maxHeight: 200),
-                                child: ListView.builder(
-                                  padding: EdgeInsets.zero,
-                                  shrinkWrap: true,
-                                  itemCount: options.length,
-                                  itemBuilder: (context, index) {
-                                    final option = options.elementAt(index);
-                                    final count = _labelCountMap[option] ?? 0;
-                                    return InkWell(
-                                      onTap: () => onSelected(option),
-                                      child: Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 16,
-                                          vertical: 12,
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(option),
-                                            ),
-                                            if (count > 1)
-                                              Text(
-                                                '×$count',
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  color: Colors.grey[600],
-                                                ),
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                    );
-                                  },
+                        fieldViewBuilder:
+                            (context, controller, focusNode, onFieldSubmitted) {
+                              _autocompleteLabelController ??= controller;
+                              return TextFormField(
+                                controller: controller,
+                                focusNode: focusNode,
+                                decoration: const InputDecoration(
+                                  labelText: 'Label *',
+                                  hintText: 'e.g., Groceries, Lunch, etc.',
+                                  border: OutlineInputBorder(),
+                                  prefixIcon: Icon(Icons.label),
+                                  contentPadding: EdgeInsets.all(2),
                                 ),
-                              ),
-                            ),
-                          );
-                        },
+                                validator: (value) {
+                                  if (value == null || value.trim().isEmpty) {
+                                    return 'Please enter a label';
+                                  }
+                                  return null;
+                                },
+                              );
+                            },
+                        // Use default options view so overlay is positioned correctly below field
+                        optionsMaxHeight: 200,
                       ),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
+                      flex: 2,
                       child: TextFormField(
                         controller: _priceController,
                         decoration: const InputDecoration(
                           labelText: 'Price *',
-                          hintText: '0.00',
+                          hintText: '0',
                           border: OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.attach_money),
+                          // prefixIcon: Icon(Icons.attach_money),
                           contentPadding: EdgeInsets.all(2),
                         ),
                         keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
+                          decimal: false,
                         ),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
                         validator: (value) {
                           if (value == null || value.trim().isEmpty) {
                             return 'Please enter a price';
@@ -1385,7 +1373,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                   ],
                 ),
                 const SizedBox(height: 6),
-Divider(), const SizedBox(height: 6),
+                Divider(), const SizedBox(height: 6),
                 // Category: wrap, 3 rows max, horizontal scroll
                 const Text(
                   'Category (Optional)',
@@ -1422,10 +1410,14 @@ Divider(), const SizedBox(height: 6),
                             },
                           );
                         }),
-                        FilterChip( pressElevation: 0,
-                            visualDensity: VisualDensity.compact,
-                            padding: EdgeInsets.all(2),
-                          label: const Text('None', style: TextStyle(fontSize: 12)),
+                        FilterChip(
+                          pressElevation: 0,
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.all(2),
+                          label: const Text(
+                            'None',
+                            style: TextStyle(fontSize: 12),
+                          ),
                           selected: _selectedCategory == null,
                           onSelected: (selected) {
                             setState(() {
@@ -1438,11 +1430,10 @@ Divider(), const SizedBox(height: 6),
                   ),
                 ),
                 const SizedBox(height: 8),
-Divider(),
+                Divider(),
                 // Date (small "30 Jan") + One time switch in one row
                 Row(
                   children: [
-                    
                     const SizedBox(width: 16),
                     const Text('One Time', style: TextStyle(fontSize: 14)),
                     const SizedBox(width: 8),
@@ -1514,13 +1505,15 @@ Divider(),
                               spacing: 4,
                               runSpacing: 4,
                               children: [
-                               
                                 ..._personNames.map((name) {
                                   return FilterChip(
                                     pressElevation: 0,
                                     visualDensity: VisualDensity.compact,
                                     padding: EdgeInsets.all(2),
-                                    label: Text(name, style: TextStyle(fontSize: 12)),
+                                    label: Text(
+                                      name,
+                                      style: TextStyle(fontSize: 12),
+                                    ),
                                     selected: _selectedPaidBy == name,
                                     onSelected: (selected) {
                                       setState(() {
@@ -1536,11 +1529,15 @@ Divider(),
                                       });
                                     },
                                   );
-                                }), FilterChip(
+                                }),
+                                FilterChip(
                                   pressElevation: 0,
                                   visualDensity: VisualDensity.compact,
                                   padding: EdgeInsets.all(2),
-                                  label: const Text('None', style: TextStyle(fontSize: 12)),
+                                  label: const Text(
+                                    'None',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
                                   selected: _selectedPaidBy == null,
                                   onSelected: (selected) {
                                     setState(() {
