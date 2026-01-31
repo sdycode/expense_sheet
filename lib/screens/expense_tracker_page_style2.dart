@@ -25,7 +25,6 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       FirebaseDatabaseService();
 
   final _formKey = GlobalKey<FormState>();
-  final _labelController = TextEditingController();
   final _priceController = TextEditingController();
   final _noteController = TextEditingController();
   final _spreadsheetIdController = TextEditingController();
@@ -45,6 +44,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   List<Expense> _expensesToUpdate = [];
   bool _isLoadingExpenses = false;
   List<FrequentExpenseItem> _frequentItems = [];
+  /// Label -> count from sheet; used for label suggestions (sorted by count).
+  Map<String, int> _labelCountMap = {};
+  TextEditingController? _autocompleteLabelController;
 
   @override
   void initState() {
@@ -133,7 +135,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   }
 
   void _applyFrequentItem(FrequentExpenseItem item) {
-    _labelController.text = item.label;
+    _autocompleteLabelController?.text = item.label;
     _priceController.text = item.price.toStringAsFixed(0);
     setState(() => _selectedCategory = item.category);
   }
@@ -701,7 +703,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     _sheetsService.setSpreadsheetId(spreadsheetId);
 
     final expense = Expense(
-      label: _labelController.text.trim(),
+      label: _autocompleteLabelController?.text.trim() ?? '',
       price: double.parse(_priceController.text.trim()),
       category: _selectedCategory,
       note: _noteController.text.trim().isEmpty
@@ -712,7 +714,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       isOneTimePurchase: _isOneTimePurchase,
     );
 
-    _labelController.clear();
+    _autocompleteLabelController?.clear();
     _priceController.clear();
     _noteController.clear();
     setState(() {
@@ -745,6 +747,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       if (success) {
         await _autoSaveSpreadsheetIfNeeded(spreadsheetId);
         _loadPersonNames();
+        _loadExpensesToUpdate(); // refresh label suggestions
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -849,7 +852,10 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
   Future<void> _loadExpensesToUpdate() async {
     if (!_isSignedIn || _spreadsheetIdController.text.trim().isEmpty) {
-      setState(() => _expensesToUpdate = []);
+      setState(() {
+        _expensesToUpdate = [];
+        _labelCountMap = {};
+      });
       return;
     }
 
@@ -857,6 +863,13 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
     try {
       final expenses = await _sheetsService.getExpenses();
+      // Build label -> count for suggestions (from all expenses)
+      final labelCountMap = <String, int>{};
+      for (final e in expenses) {
+        final label = e.label.trim();
+        if (label.isEmpty) continue;
+        labelCountMap[label] = (labelCountMap[label] ?? 0) + 1;
+      }
       final expensesToUpdate = expenses.where((expense) {
         final newCategory = _getCategoryFromLabelAndNotes(expense);
         return newCategory != null && newCategory != expense.category;
@@ -864,12 +877,14 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
       setState(() {
         _expensesToUpdate = expensesToUpdate;
+        _labelCountMap = labelCountMap;
         _isLoadingExpenses = false;
       });
     } catch (e) {
       debugPrint('Error loading expenses: $e');
       setState(() {
         _expensesToUpdate = [];
+        _labelCountMap = {};
         _isLoadingExpenses = false;
       });
     }
@@ -1073,7 +1088,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
   @override
   void dispose() {
-    _labelController.dispose();
+    // _autocompleteLabelController is owned by Autocomplete, do not dispose
     _priceController.dispose();
     _noteController.dispose();
     _spreadsheetIdController.dispose();
@@ -1250,24 +1265,94 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 ] else
                   const SizedBox(height: 8),
 
-                // Label and Price - no change
+                // Label (with suggestions from sheet) and Price
                 Row(
                   children: [
                     Expanded(
-                      child: TextFormField(
-                        controller: _labelController,
-                        decoration: const InputDecoration(
-                          labelText: 'Label *',
-                          hintText: 'e.g., Groceries, Lunch, etc.',
-                          border: OutlineInputBorder(),
-                          prefixIcon: Icon(Icons.label),
-                          contentPadding: EdgeInsets.all(2),
-                        ),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Please enter a label';
-                          }
-                          return null;
+                      child: Autocomplete<String>(
+                        displayStringForOption: (s) => s,
+                        optionsBuilder: (TextEditingValue value) {
+                          final q = value.text.trim().toLowerCase();
+                          List<String> keys = q.isEmpty
+                              ? _labelCountMap.keys.toList()
+                              : _labelCountMap.keys
+                                  .where((l) => l.toLowerCase().contains(q))
+                                  .toList();
+                          keys.sort((a, b) =>
+                              (_labelCountMap[b] ?? 0).compareTo(_labelCountMap[a] ?? 0));
+                          return keys;
+                        },
+                        onSelected: (String value) {
+                          _autocompleteLabelController?.text = value;
+                        },
+                        fieldViewBuilder: (
+                          context,
+                          controller,
+                          focusNode,
+                          onFieldSubmitted,
+                        ) {
+                          _autocompleteLabelController ??= controller;
+                          return TextFormField(
+                            controller: controller,
+                            focusNode: focusNode,
+                            decoration: const InputDecoration(
+                              labelText: 'Label *',
+                              hintText: 'e.g., Groceries, Lunch, etc.',
+                              border: OutlineInputBorder(),
+                              prefixIcon: Icon(Icons.label),
+                              contentPadding: EdgeInsets.all(2),
+                            ),
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Please enter a label';
+                              }
+                              return null;
+                            },
+                          );
+                        },
+                        optionsViewBuilder: (context, onSelected, options) {
+                          return Align(
+                            alignment: Alignment.topLeft,
+                            child: Material(
+                              elevation: 4,
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(maxHeight: 200),
+                                child: ListView.builder(
+                                  padding: EdgeInsets.zero,
+                                  shrinkWrap: true,
+                                  itemCount: options.length,
+                                  itemBuilder: (context, index) {
+                                    final option = options.elementAt(index);
+                                    final count = _labelCountMap[option] ?? 0;
+                                    return InkWell(
+                                      onTap: () => onSelected(option),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 12,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(option),
+                                            ),
+                                            if (count > 1)
+                                              Text(
+                                                '×$count',
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.grey[600],
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                          );
                         },
                       ),
                     ),
