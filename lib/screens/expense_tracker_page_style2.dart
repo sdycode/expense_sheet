@@ -8,7 +8,9 @@ import 'package:expensesheet/utils/expense_categories.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:convert';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ExpenseTrackerPageStyle2 extends StatefulWidget {
   const ExpenseTrackerPageStyle2({super.key});
@@ -128,14 +130,48 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       setState(() => _frequentItems = []);
       return;
     }
+
+    final prefs = await SharedPreferences.getInstance();
+    final cacheKey = 'frequent_items_$_userEmail';
+
+    // 1. Load from local cache instantly
+    try {
+      final cachedData = prefs.getString(cacheKey);
+      if (cachedData != null) {
+        final List<dynamic> decoded = json.decode(cachedData);
+        final cachedItems = decoded
+            .map(
+              (itemMap) =>
+                  FrequentExpenseItem.fromMap(itemMap['id'] ?? '', itemMap),
+            )
+            .where((e) => e.show)
+            .toList();
+
+        setState(() => _frequentItems = cachedItems);
+      }
+    } catch (e) {
+      debugPrint('Error loading frequent items from cache: $e');
+    }
+
+    // 2. Fetch from Firebase and update cache
     try {
       final all = await _firebaseDatabaseService.getFrequentExpenseItems(
         _userEmail!,
       );
+
       setState(() => _frequentItems = all.where((e) => e.show).toList());
+
+      final itemsToCache = all.map((e) {
+        final map = e.toMap();
+        map['id'] = e.id;
+        return map;
+      }).toList();
+      await prefs.setString(cacheKey, json.encode(itemsToCache));
     } catch (e) {
       debugPrint('Error loading frequent items: $e');
-      setState(() => _frequentItems = []);
+      if (_frequentItems.isEmpty) {
+        setState(() => _frequentItems = []);
+      }
     }
   }
 
@@ -161,16 +197,40 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       setState(() => _isLoadingPersonNames = false);
       return;
     }
-    setState(() => _isLoadingPersonNames = true);
+
+    final prefs = await SharedPreferences.getInstance();
+    final cacheKey = 'person_names_$_userEmail';
+
+    // 1. Load from local cache instantly
+    try {
+      final cachedData = prefs.getStringList(cacheKey);
+      if (cachedData != null) {
+        final uniqueNames = cachedData.toSet().toList()..sort();
+        setState(() {
+          _personNames = uniqueNames;
+        });
+        await _loadDefaultPaidByName();
+      } else {
+        setState(() => _isLoadingPersonNames = true);
+      }
+    } catch (e) {
+      debugPrint('Error loading person names from cache: $e');
+      setState(() => _isLoadingPersonNames = true);
+    }
+
+    // 2. Fetch from Firebase and update cache
     try {
       final names = await _firebaseDatabaseService.getPaidByPersons(
         _userEmail!,
       );
       final uniqueNames = names.toSet().toList()..sort();
+
       setState(() {
         _personNames = uniqueNames;
         _isLoadingPersonNames = false;
       });
+
+      await prefs.setStringList(cacheKey, uniqueNames);
       await _loadDefaultPaidByName();
     } catch (e) {
       debugPrint('Error loading person names: $e');

@@ -1,33 +1,13 @@
-import 'package:expensesheet/screens/ExpenseTrackerPage.dart';
-import 'package:expensesheet/screens/expense_tracker_page_style2.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:intl/intl.dart';
-import 'models/expense.dart';
-import 'services/firebase_auth_service.dart';
-import 'services/google_sheets_service.dart';
-import 'services/spreadsheet_storage_service.dart';
-import 'services/firebase_database_service.dart';
-import 'screens/121212.dart';
-import 'utils/expense_categories.dart';
+import 'package:flutter_native_splash/flutter_native_splash.dart';
+import 'screens/startup_view.dart';
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await Firebase.initializeApp();
-    debugPrint('Firebase initialized successfully');
-  } catch (e) {
-    debugPrint('Error initializing Firebase: $e');
-    debugPrint('Make sure you have:');
-    debugPrint('1. Added google-services.json to android/app/');
-    debugPrint('2. Updated firebase_options.dart with your Firebase config');
-    debugPrint('3. OR run: flutterfire configure');
-    // Continue anyway - Firebase might work if configured correctly
-  }
+void main() {
+  WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+
   runApp(const MyApp());
-}
+} 
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -52,7 +32,7 @@ class MyApp extends StatelessWidget {
           bodySmall: TextStyle(color: Colors.black),
         ),
       ),
-      home: const ExpenseTrackerPageStyle2(),
+      home: const StartupView(),
     );
   }
 }
