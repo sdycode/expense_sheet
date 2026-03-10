@@ -47,6 +47,7 @@ dependencies:
   firebase_database: ^11.3.10
   flutter_native_splash: ^2.4.4
   flutter_secure_storage: ^9.2.2
+  url_launcher: 6.2.6
 
 dev_dependencies:
   flutter_test:

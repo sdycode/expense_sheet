@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import '../services/spreadsheet_storage_service.dart';
 import '../services/google_sheets_service.dart';
+import '../services/firebase_auth_service.dart';
+import '../services/firebase_database_service.dart';
 import 'expenses_list_screen.dart';
 
 class SpreadsheetSelectionScreen extends StatefulWidget {
@@ -30,9 +32,36 @@ class _SpreadsheetSelectionScreenState
   Future<void> _loadSpreadsheets() async {
     setState(() => _isLoading = true);
     try {
-      final spreadsheets = await _storageService.getSavedSpreadsheets();
+      final localSpreadsheets = await _storageService.getSavedSpreadsheets();
+      List<SpreadsheetInfo> sharedSpreadsheetsInfo = [];
+
+      final currentUserEmail = FirebaseAuthService().currentUser?.email;
+      if (currentUserEmail != null) {
+        final sharedSheets = await FirebaseDatabaseService()
+            .getSharedSpreadsheets(currentUserEmail);
+        for (var sheet in sharedSheets) {
+          sharedSpreadsheetsInfo.add(
+            SpreadsheetInfo(
+              id: sheet['id']!,
+              name: '${sheet['name']} (Shared)',
+              addedDate:
+                  DateTime.now(), // Approximate since we only need string formatting
+            ),
+          );
+        }
+      }
+
+      // Combine and remove duplicates by ID
+      final Map<String, SpreadsheetInfo> uniqueSheets = {};
+      for (var sheet in localSpreadsheets) {
+        uniqueSheets[sheet.id] = sheet;
+      }
+      for (var sheet in sharedSpreadsheetsInfo) {
+        uniqueSheets[sheet.id] = sheet;
+      }
+
       setState(() {
-        _spreadsheets = spreadsheets;
+        _spreadsheets = uniqueSheets.values.toList();
       });
     } catch (e) {
       debugPrint('Error loading spreadsheets: $e');

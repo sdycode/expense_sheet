@@ -4,12 +4,9 @@ import 'package:expensesheet/utils/expense_categories.dart';
 import 'package:flutter/material.dart';
 
 class FrequentExpenseItemsPage extends StatefulWidget {
-  final String userEmail;
+  final String spreadsheetId;
 
-  const FrequentExpenseItemsPage({
-    super.key,
-    required this.userEmail,
-  });
+  const FrequentExpenseItemsPage({super.key, required this.spreadsheetId});
 
   @override
   State<FrequentExpenseItemsPage> createState() =>
@@ -30,7 +27,7 @@ class _FrequentExpenseItemsPageState extends State<FrequentExpenseItemsPage> {
   Future<void> _loadItems() async {
     setState(() => _isLoading = true);
     try {
-      final items = await _db.getFrequentExpenseItems(widget.userEmail);
+      final items = await _db.getFrequentExpenseItems(widget.spreadsheetId);
       setState(() {
         _items = items;
         _isLoading = false;
@@ -39,7 +36,10 @@ class _FrequentExpenseItemsPageState extends State<FrequentExpenseItemsPage> {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading items: $e'), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text('Error loading items: $e'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -47,7 +47,10 @@ class _FrequentExpenseItemsPageState extends State<FrequentExpenseItemsPage> {
 
   Future<void> _toggleShow(FrequentExpenseItem item) async {
     final updated = item.copyWith(show: !item.show);
-    final ok = await _db.updateFrequentExpenseItem(widget.userEmail, updated);
+    final ok = await _db.updateFrequentExpenseItem(
+      widget.spreadsheetId,
+      updated,
+    );
     if (ok && mounted) {
       setState(() {
         final i = _items.indexWhere((e) => e.id == item.id);
@@ -84,11 +87,17 @@ class _FrequentExpenseItemsPageState extends State<FrequentExpenseItemsPage> {
       ),
     );
     if (confirm != true) return;
-    final ok = await _db.deleteFrequentExpenseItem(widget.userEmail, item.id);
+    final ok = await _db.deleteFrequentExpenseItem(
+      widget.spreadsheetId,
+      item.id,
+    );
     if (ok && mounted) {
       setState(() => _items.removeWhere((e) => e.id == item.id));
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Item deleted'), backgroundColor: Colors.green),
+        const SnackBar(
+          content: Text('Item deleted'),
+          backgroundColor: Colors.green,
+        ),
       );
     }
   }
@@ -127,7 +136,9 @@ class _FrequentExpenseItemsPageState extends State<FrequentExpenseItemsPage> {
                       border: OutlineInputBorder(),
                       contentPadding: EdgeInsets.all(8),
                     ),
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
@@ -190,7 +201,7 @@ class _FrequentExpenseItemsPageState extends State<FrequentExpenseItemsPage> {
                       show: show,
                     );
                     final ok = await _db.updateFrequentExpenseItem(
-                      widget.userEmail,
+                      widget.spreadsheetId,
                       updated,
                     );
                     if (ok && mounted) {
@@ -214,7 +225,7 @@ class _FrequentExpenseItemsPageState extends State<FrequentExpenseItemsPage> {
                       show: show,
                     );
                     final id = await _db.addFrequentExpenseItem(
-                      widget.userEmail,
+                      widget.spreadsheetId,
                       item,
                     );
                     if (id != null && mounted) {
@@ -240,78 +251,80 @@ class _FrequentExpenseItemsPageState extends State<FrequentExpenseItemsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Frequent Expense Items'),
-      ),
+      appBar: AppBar(title: const Text('Frequent Expense Items')),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _items.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.star_border, size: 64, color: Colors.grey[400]),
-                      const SizedBox(height: 16),
-                      Text(
-                        'No frequent items yet',
-                        style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Tap + to add items that appear on the home screen',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 12, color: Colors.grey),
-                      ),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.star_border, size: 64, color: Colors.grey[400]),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No frequent items yet',
+                    style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                   ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _loadItems,
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _items.length,
-                    itemBuilder: (context, index) {
-                      final item = _items[index];
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        child: ListTile(
-                          title: Text(
-                            item.label,
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: Text(
-                            '₹${item.price.toStringAsFixed(0)}${item.category != null ? ' • ${item.category}' : ''}',
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                item.show ? 'Show' : 'Hide',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: item.show ? Colors.green : Colors.grey,
-                                ),
-                              ),
-                              Switch(
-                                value: item.show,
-                                onChanged: (_) => _toggleShow(item),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.edit, size: 20),
-                                onPressed: () => _showAddEditDialog(item),
-                              ),
-                              IconButton(
-                                icon: Icon(Icons.delete, size: 20, color: Colors.red[700]),
-                                onPressed: () => _deleteItem(item),
-                              ),
-                            ],
-                          ),
-                          onTap: () => _showAddEditDialog(item),
-                        ),
-                      );
-                    },
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Tap + to add items that appear on the home screen',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
                   ),
-                ),
+                ],
+              ),
+            )
+          : RefreshIndicator(
+              onRefresh: _loadItems,
+              child: ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: _items.length,
+                itemBuilder: (context, index) {
+                  final item = _items[index];
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    child: ListTile(
+                      title: Text(
+                        item.label,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Text(
+                        '₹${item.price.toStringAsFixed(0)}${item.category != null ? ' • ${item.category}' : ''}',
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            item.show ? 'Show' : 'Hide',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: item.show ? Colors.green : Colors.grey,
+                            ),
+                          ),
+                          Switch(
+                            value: item.show,
+                            onChanged: (_) => _toggleShow(item),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.edit, size: 20),
+                            onPressed: () => _showAddEditDialog(item),
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              Icons.delete,
+                              size: 20,
+                              color: Colors.red[700],
+                            ),
+                            onPressed: () => _deleteItem(item),
+                          ),
+                        ],
+                      ),
+                      onTap: () => _showAddEditDialog(item),
+                    ),
+                  );
+                },
+              ),
+            ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _showAddEditDialog(),
         child: const Icon(Icons.add),

@@ -1,4 +1,3 @@
-
 import 'package:expensesheet/models/expense.dart';
 import 'package:expensesheet/screens/Spread_sheet_Selection_Screen.dart';
 import 'package:expensesheet/services/services_module.dart';
@@ -124,7 +123,8 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
   }
 
   Future<void> _loadPersonNames() async {
-    if (!_isSignedIn || _userEmail == null) {
+    final spreadsheetId = _spreadsheetIdController.text.trim();
+    if (!_isSignedIn || spreadsheetId.isEmpty) {
       setState(() {
         _isLoadingPersonNames = false;
       });
@@ -136,7 +136,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
     try {
       // Fetch from Firebase Database instead of Google Sheets
       final names = await _firebaseDatabaseService.getPaidByPersons(
-        _userEmail!,
+        spreadsheetId,
       );
       debugPrint('Person names from Firebase: $names');
       // Remove duplicates and sort
@@ -1038,6 +1038,92 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
     super.dispose();
   }
 
+  Future<void> _showShareSpreadsheetDialog() async {
+    final emailController = TextEditingController();
+    final spreadsheetId = _spreadsheetIdController.text.trim();
+
+    if (spreadsheetId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a spreadsheet ID first.')),
+      );
+      return;
+    }
+
+    final formKey = GlobalKey<FormState>();
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Share Spreadsheet'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Enter the email format you want to share with:'),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Email Address',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.emailAddress,
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Please enter an email';
+                  }
+                  if (!value.trim().contains('@')) {
+                    return 'Please enter a valid email';
+                  }
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (formKey.currentState!.validate()) {
+                final email = emailController.text.trim();
+                final success = await _firebaseDatabaseService.shareSpreadsheet(
+                  email,
+                  spreadsheetId,
+                  'Shared Spreadsheet',
+                );
+
+                if (context.mounted) {
+                  Navigator.pop(context);
+                  if (success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Spreadsheet shared with $email!'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Failed to share spreadsheet.'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              }
+            },
+            child: const Text('Share'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1050,6 +1136,11 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
               icon: const Icon(Icons.email),
               onPressed: _showUserInfoDialog,
               tooltip: 'View Account Info',
+            ),
+            IconButton(
+              icon: const Icon(Icons.share),
+              onPressed: _showShareSpreadsheetDialog,
+              tooltip: 'Share Spreadsheet',
             ),
             IconButton(
               icon: const Icon(Icons.logout),

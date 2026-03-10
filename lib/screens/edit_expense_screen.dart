@@ -10,11 +10,13 @@ import '../utils/expense_categories.dart';
 class EditExpenseScreen extends StatefulWidget {
   final Expense expense;
   final GoogleSheetsService sheetsService;
+  final String spreadsheetId;
 
   const EditExpenseScreen({
     super.key,
     required this.expense,
     required this.sheetsService,
+    required this.spreadsheetId,
   });
 
   @override
@@ -47,8 +49,13 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
     );
     _noteController = TextEditingController(text: widget.expense.note ?? '');
     // Parse category - if comma-separated, take the first one
-    if (widget.expense.category != null && widget.expense.category!.isNotEmpty) {
-      final categories = widget.expense.category!.split(',').map((c) => c.trim()).where((c) => c.isNotEmpty).toList();
+    if (widget.expense.category != null &&
+        widget.expense.category!.isNotEmpty) {
+      final categories = widget.expense.category!
+          .split(',')
+          .map((c) => c.trim())
+          .where((c) => c.isNotEmpty)
+          .toList();
       _selectedCategory = categories.isNotEmpty ? categories.first : null;
     } else {
       _selectedCategory = null;
@@ -61,8 +68,8 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
   }
 
   Future<void> _loadEvents() async {
-    final userEmail = FirebaseAuthService().currentUser?.email;
-    if (userEmail == null || userEmail.isEmpty) {
+    final spreadsheetId = widget.spreadsheetId;
+    if (spreadsheetId.isEmpty) {
       setState(() {
         _events = [];
         _selectedEventIds = {};
@@ -71,8 +78,11 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
       return;
     }
     try {
-      final events = await _firebaseDb.getEvents(userEmail);
-      final eventIds = await _firebaseDb.getEventIdsForExpense(userEmail, widget.expense.id);
+      final events = await _firebaseDb.getEvents(spreadsheetId);
+      final eventIds = await _firebaseDb.getEventIdsForExpense(
+        spreadsheetId,
+        widget.expense.id,
+      );
       if (mounted) {
         setState(() {
           _events = events;
@@ -168,9 +178,12 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
     );
 
     // Save event links in Firebase (expense can belong to multiple events)
-    final userEmail = FirebaseAuthService().currentUser?.email;
-    if (userEmail != null && userEmail.isNotEmpty) {
-      _firebaseDb.setExpenseEvents(userEmail, widget.expense.id, _selectedEventIds.toList());
+    if (widget.spreadsheetId.isNotEmpty) {
+      _firebaseDb.setExpenseEvents(
+        widget.spreadsheetId,
+        widget.expense.id,
+        _selectedEventIds.toList(),
+      );
     }
 
     // Close screen immediately for better UX
@@ -369,32 +382,32 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
                       ),
                     ),
                   ),
-                
                 ],
-              ),  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.shopping_cart, size: 20),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'One Time',
-                          style: TextStyle(fontSize: 14),
-                        ),
-                        const SizedBox(width: 8),
-                        Switch(
-                          value: _isOneTimePurchase,
-                          onChanged: (value) {
-                            setState(() {
-                              _isOneTimePurchase = value;
-                            });
-                          },
-                        ),
-                      ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 0,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.shopping_cart, size: 20),
+                    const SizedBox(width: 8),
+                    const Text('One Time', style: TextStyle(fontSize: 14)),
+                    const SizedBox(width: 8),
+                    Switch(
+                      value: _isOneTimePurchase,
+                      onChanged: (value) {
+                        setState(() {
+                          _isOneTimePurchase = value;
+                        });
+                      },
                     ),
-                  ),
+                  ],
+                ),
+              ),
               const SizedBox(height: 16),
               // Paid By (Optional)
               _isLoadingPersonNames
@@ -480,35 +493,35 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
                       child: LinearProgressIndicator(),
                     )
                   : _events.isEmpty
-                      ? Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: Text(
-                            FirebaseAuthService().currentUser?.email == null
-                                ? 'Sign in to manage events'
-                                : 'No events yet. Create events to group this expense.',
-                            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                          ),
-                        )
-                      : Wrap(
-                          spacing: 8,
-                          runSpacing: 6,
-                          children: _events.map((event) {
-                            final selected = _selectedEventIds.contains(event.id);
-                            return FilterChip(
-                              label: Text(event.name),
-                              selected: selected,
-                              onSelected: (value) {
-                                setState(() {
-                                  if (value) {
-                                    _selectedEventIds.add(event.id);
-                                  } else {
-                                    _selectedEventIds.remove(event.id);
-                                  }
-                                });
-                              },
-                            );
-                          }).toList(),
-                        ),
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        FirebaseAuthService().currentUser?.email == null
+                            ? 'Sign in to manage events'
+                            : 'No events yet. Create events to group this expense.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    )
+                  : Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: _events.map((event) {
+                        final selected = _selectedEventIds.contains(event.id);
+                        return FilterChip(
+                          label: Text(event.name),
+                          selected: selected,
+                          onSelected: (value) {
+                            setState(() {
+                              if (value) {
+                                _selectedEventIds.add(event.id);
+                              } else {
+                                _selectedEventIds.remove(event.id);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
               const SizedBox(height: 24),
 
               // Update Button
@@ -545,5 +558,3 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
     );
   }
 }
-
-

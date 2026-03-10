@@ -6,37 +6,86 @@ import 'package:flutter/foundation.dart';
 class FirebaseDatabaseService {
   final FirebaseDatabase _database = FirebaseDatabase.instance;
 
-  // Sanitize email to be safe for Firebase path (replace . with ,)
+  // Get reference to the paid_by node for a specific spreadsheet
+  DatabaseReference _getPaidByRef(String spreadsheetId) {
+    return _database.ref().child('expenseSheet/$spreadsheetId/paid_by');
+  }
+
+  // Get reference to frequent_expenses for a spreadsheet
+  DatabaseReference _getFrequentExpensesRef(String spreadsheetId) {
+    return _database.ref().child(
+      'expenseSheet/$spreadsheetId/frequent_expenses',
+    );
+  }
+
+  DatabaseReference _getEventsRef(String spreadsheetId) {
+    return _database.ref().child('expenseSheet/$spreadsheetId/events');
+  }
+
+  DatabaseReference _getExpenseEventsRef(String spreadsheetId) {
+    return _database.ref().child('expenseSheet/$spreadsheetId/expense_events');
+  }
+
+  // --- Spreadsheet Sharing ---
   String _sanitizeEmail(String email) {
     return email.replaceAll('.', ',');
   }
 
-  // Get reference to the paid_by node for a specific user
-  DatabaseReference _getPaidByRef(String userEmail) {
+  DatabaseReference _getSharedSheetsRef(String userEmail) {
     final sanitizedEmail = _sanitizeEmail(userEmail);
-    return _database.ref().child('expenseSheet/$sanitizedEmail/paid_by');
+    return _database.ref().child('user_sheets/$sanitizedEmail');
   }
 
-  // Get reference to frequent_expenses for a user
-  DatabaseReference _getFrequentExpensesRef(String userEmail) {
-    final sanitizedEmail = _sanitizeEmail(userEmail);
-    return _database.ref().child('expenseSheet/$sanitizedEmail/frequent_expenses');
+  Future<bool> shareSpreadsheet(
+    String userEmailToShareWith,
+    String spreadsheetId,
+    String spreadsheetName,
+  ) async {
+    try {
+      final ref = _getSharedSheetsRef(
+        userEmailToShareWith,
+      ).child(spreadsheetId);
+      await ref.set({
+        'name': spreadsheetName,
+        'sharedAt': DateTime.now().toIso8601String(),
+      });
+      return true;
+    } catch (e) {
+      debugPrint('Error sharing spreadsheet: $e');
+      return false;
+    }
   }
 
-  DatabaseReference _getEventsRef(String userEmail) {
-    final sanitizedEmail = _sanitizeEmail(userEmail);
-    return _database.ref().child('expenseSheet/$sanitizedEmail/events');
-  }
+  Future<List<Map<String, String>>> getSharedSpreadsheets(
+    String userEmail,
+  ) async {
+    try {
+      final ref = _getSharedSheetsRef(userEmail);
+      final snapshot = await ref.get();
+      if (!snapshot.exists || snapshot.value == null) return [];
 
-  DatabaseReference _getExpenseEventsRef(String userEmail) {
-    final sanitizedEmail = _sanitizeEmail(userEmail);
-    return _database.ref().child('expenseSheet/$sanitizedEmail/expense_events');
+      final data = snapshot.value as Map<dynamic, dynamic>;
+      final sharedSheets = <Map<String, String>>[];
+
+      for (final entry in data.entries) {
+        final id = entry.key.toString();
+        final value = entry.value as Map<dynamic, dynamic>;
+        sharedSheets.add({
+          'id': id,
+          'name': value['name']?.toString() ?? 'Unnamed Shared Sheet',
+        });
+      }
+      return sharedSheets;
+    } catch (e) {
+      debugPrint('Error getting shared spreadsheets: $e');
+      return [];
+    }
   }
 
   // Fetch list of paid by persons
-  Future<List<String>> getPaidByPersons(String userEmail) async {
+  Future<List<String>> getPaidByPersons(String spreadsheetId) async {
     try {
-      final ref = _getPaidByRef(userEmail);
+      final ref = _getPaidByRef(spreadsheetId);
       final snapshot = await ref.get();
 
       if (snapshot.exists && snapshot.value != null) {
@@ -57,16 +106,16 @@ class FirebaseDatabaseService {
   }
 
   // Add a new person to the list
-  Future<bool> addPaidByPerson(String userEmail, String personName) async {
+  Future<bool> addPaidByPerson(String spreadsheetId, String personName) async {
     try {
-      final persons = await getPaidByPersons(userEmail);
+      final persons = await getPaidByPersons(spreadsheetId);
 
       // Check if person already exists (case-insensitive check might be good, but strict for now matches previous behavior)
       if (persons.contains(personName)) {
         return false;
       }
 
-      final ref = _getPaidByRef(userEmail);
+      final ref = _getPaidByRef(spreadsheetId);
       // We can push a new node for the person
       await ref.push().set(personName);
       return true;
@@ -78,9 +127,11 @@ class FirebaseDatabaseService {
 
   // --- Frequent Expense Items ---
 
-  Future<List<FrequentExpenseItem>> getFrequentExpenseItems(String userEmail) async {
+  Future<List<FrequentExpenseItem>> getFrequentExpenseItems(
+    String spreadsheetId,
+  ) async {
     try {
-      final ref = _getFrequentExpensesRef(userEmail);
+      final ref = _getFrequentExpensesRef(spreadsheetId);
       final snapshot = await ref.get();
 
       if (!snapshot.exists || snapshot.value == null) return [];
@@ -98,9 +149,12 @@ class FirebaseDatabaseService {
     }
   }
 
-  Future<String?> addFrequentExpenseItem(String userEmail, FrequentExpenseItem item) async {
+  Future<String?> addFrequentExpenseItem(
+    String spreadsheetId,
+    FrequentExpenseItem item,
+  ) async {
     try {
-      final ref = _getFrequentExpensesRef(userEmail);
+      final ref = _getFrequentExpensesRef(spreadsheetId);
       final newRef = ref.push();
       await newRef.set(item.toMap());
       return newRef.key;
@@ -110,9 +164,12 @@ class FirebaseDatabaseService {
     }
   }
 
-  Future<bool> updateFrequentExpenseItem(String userEmail, FrequentExpenseItem item) async {
+  Future<bool> updateFrequentExpenseItem(
+    String spreadsheetId,
+    FrequentExpenseItem item,
+  ) async {
     try {
-      final ref = _getFrequentExpensesRef(userEmail).child(item.id);
+      final ref = _getFrequentExpensesRef(spreadsheetId).child(item.id);
       await ref.update(item.toMap());
       return true;
     } catch (e) {
@@ -121,9 +178,12 @@ class FirebaseDatabaseService {
     }
   }
 
-  Future<bool> deleteFrequentExpenseItem(String userEmail, String itemId) async {
+  Future<bool> deleteFrequentExpenseItem(
+    String spreadsheetId,
+    String itemId,
+  ) async {
     try {
-      final ref = _getFrequentExpensesRef(userEmail).child(itemId);
+      final ref = _getFrequentExpensesRef(spreadsheetId).child(itemId);
       await ref.remove();
       return true;
     } catch (e) {
@@ -137,9 +197,9 @@ class FirebaseDatabaseService {
   // events/{eventId}/expense_ids/{expenseId} = true
   // expense_events/{expenseId}/{eventId} = true (reverse index)
 
-  Future<List<Event>> getEvents(String userEmail) async {
+  Future<List<Event>> getEvents(String spreadsheetId) async {
     try {
-      final ref = _getEventsRef(userEmail);
+      final ref = _getEventsRef(spreadsheetId);
       final snapshot = await ref.get();
       if (!snapshot.exists || snapshot.value == null) return [];
 
@@ -164,9 +224,9 @@ class FirebaseDatabaseService {
     }
   }
 
-  Future<String?> addEvent(String userEmail, Event event) async {
+  Future<String?> addEvent(String spreadsheetId, Event event) async {
     try {
-      final ref = _getEventsRef(userEmail);
+      final ref = _getEventsRef(spreadsheetId);
       final newRef = ref.push();
       final data = event.toMap();
       await newRef.set(data);
@@ -177,9 +237,9 @@ class FirebaseDatabaseService {
     }
   }
 
-  Future<bool> updateEvent(String userEmail, Event event) async {
+  Future<bool> updateEvent(String spreadsheetId, Event event) async {
     try {
-      final ref = _getEventsRef(userEmail).child(event.id);
+      final ref = _getEventsRef(spreadsheetId).child(event.id);
       await ref.update(event.toMap());
       return true;
     } catch (e) {
@@ -188,16 +248,19 @@ class FirebaseDatabaseService {
     }
   }
 
-  Future<bool> deleteEvent(String userEmail, String eventId) async {
+  Future<bool> deleteEvent(String spreadsheetId, String eventId) async {
     try {
-      final ref = _getEventsRef(userEmail).child(eventId);
+      final ref = _getEventsRef(spreadsheetId).child(eventId);
       await ref.remove();
-      final expenseEventsRef = _getExpenseEventsRef(userEmail);
+      final expenseEventsRef = _getExpenseEventsRef(spreadsheetId);
       final snapshot = await expenseEventsRef.get();
       if (snapshot.exists && snapshot.value != null) {
         final data = snapshot.value as Map<dynamic, dynamic>;
         for (final expenseId in data.keys) {
-          await expenseEventsRef.child(expenseId.toString()).child(eventId).remove();
+          await expenseEventsRef
+              .child(expenseId.toString())
+              .child(eventId)
+              .remove();
         }
       }
       return true;
@@ -207,9 +270,12 @@ class FirebaseDatabaseService {
     }
   }
 
-  Future<List<String>> getEventIdsForExpense(String userEmail, String expenseId) async {
+  Future<List<String>> getEventIdsForExpense(
+    String spreadsheetId,
+    String expenseId,
+  ) async {
     try {
-      final ref = _getExpenseEventsRef(userEmail).child(expenseId);
+      final ref = _getExpenseEventsRef(spreadsheetId).child(expenseId);
       final snapshot = await ref.get();
       if (!snapshot.exists || snapshot.value == null) return [];
       final data = snapshot.value as Map<dynamic, dynamic>;
@@ -221,9 +287,14 @@ class FirebaseDatabaseService {
   }
 
   /// Returns expense ids that are linked to the given event (from events/{eventId}/expense_ids).
-  Future<List<String>> getExpenseIdsForEvent(String userEmail, String eventId) async {
+  Future<List<String>> getExpenseIdsForEvent(
+    String spreadsheetId,
+    String eventId,
+  ) async {
     try {
-      final ref = _getEventsRef(userEmail).child(eventId).child('expense_ids');
+      final ref = _getEventsRef(
+        spreadsheetId,
+      ).child(eventId).child('expense_ids');
       final snapshot = await ref.get();
       if (!snapshot.exists || snapshot.value == null) return [];
       final data = snapshot.value as Map<dynamic, dynamic>;
@@ -234,10 +305,16 @@ class FirebaseDatabaseService {
     }
   }
 
-  Future<bool> setExpenseEvents(String userEmail, String expenseId, List<String> eventIds) async {
+  Future<bool> setExpenseEvents(
+    String spreadsheetId,
+    String expenseId,
+    List<String> eventIds,
+  ) async {
     try {
-      final eventsRef = _getEventsRef(userEmail);
-      final expenseEventsRef = _getExpenseEventsRef(userEmail).child(expenseId);
+      final eventsRef = _getEventsRef(spreadsheetId);
+      final expenseEventsRef = _getExpenseEventsRef(
+        spreadsheetId,
+      ).child(expenseId);
 
       final previousSnapshot = await expenseEventsRef.get();
       final previousIds = <String>{};
@@ -249,12 +326,20 @@ class FirebaseDatabaseService {
 
       for (final eventId in previousIds) {
         if (!newSet.contains(eventId)) {
-          await eventsRef.child(eventId).child('expense_ids').child(expenseId).remove();
+          await eventsRef
+              .child(eventId)
+              .child('expense_ids')
+              .child(expenseId)
+              .remove();
           await expenseEventsRef.child(eventId).remove();
         }
       }
       for (final eventId in newSet) {
-        await eventsRef.child(eventId).child('expense_ids').child(expenseId).set(true);
+        await eventsRef
+            .child(eventId)
+            .child('expense_ids')
+            .child(expenseId)
+            .set(true);
         await expenseEventsRef.child(eventId).set(true);
       }
       return true;

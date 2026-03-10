@@ -126,13 +126,14 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   }
 
   Future<void> _loadFrequentItems() async {
-    if (!_isSignedIn || _userEmail == null) {
+    final spreadsheetId = _spreadsheetIdController.text.trim();
+    if (!_isSignedIn || spreadsheetId.isEmpty) {
       setState(() => _frequentItems = []);
       return;
     }
 
     final prefs = await SharedPreferences.getInstance();
-    final cacheKey = 'frequent_items_$_userEmail';
+    final cacheKey = 'frequent_items_$spreadsheetId';
 
     // 1. Load from local cache instantly
     try {
@@ -156,7 +157,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     // 2. Fetch from Firebase and update cache
     try {
       final all = await _firebaseDatabaseService.getFrequentExpenseItems(
-        _userEmail!,
+        spreadsheetId,
       );
 
       setState(() => _frequentItems = all.where((e) => e.show).toList());
@@ -182,24 +183,27 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   }
 
   Future<void> _openFrequentExpenseItemsPage() async {
-    if (_userEmail == null) return;
+    final spreadsheetId = _spreadsheetIdController.text.trim();
+    if (spreadsheetId.isEmpty) return;
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => FrequentExpenseItemsPage(userEmail: _userEmail!),
+        builder: (context) =>
+            FrequentExpenseItemsPage(spreadsheetId: spreadsheetId),
       ),
     );
     await _loadFrequentItems();
   }
 
   Future<void> _loadPersonNames() async {
-    if (!_isSignedIn || _userEmail == null) {
+    final spreadsheetId = _spreadsheetIdController.text.trim();
+    if (!_isSignedIn || spreadsheetId.isEmpty) {
       setState(() => _isLoadingPersonNames = false);
       return;
     }
 
     final prefs = await SharedPreferences.getInstance();
-    final cacheKey = 'person_names_$_userEmail';
+    final cacheKey = 'person_names_$spreadsheetId';
 
     // 1. Load from local cache instantly
     try {
@@ -221,7 +225,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     // 2. Fetch from Firebase and update cache
     try {
       final names = await _firebaseDatabaseService.getPaidByPersons(
-        _userEmail!,
+        spreadsheetId,
       );
       final uniqueNames = names.toSet().toList()..sort();
 
@@ -1163,6 +1167,92 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     super.dispose();
   }
 
+  Future<void> _showShareSpreadsheetDialog() async {
+    final emailController = TextEditingController();
+    final spreadsheetId = _spreadsheetIdController.text.trim();
+
+    if (spreadsheetId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a spreadsheet ID first.')),
+      );
+      return;
+    }
+
+    final formKey = GlobalKey<FormState>();
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Share Spreadsheet'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Enter the email format you want to share with:'),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Email Address',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.emailAddress,
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Please enter an email';
+                  }
+                  if (!value.trim().contains('@')) {
+                    return 'Please enter a valid email';
+                  }
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (formKey.currentState!.validate()) {
+                final email = emailController.text.trim();
+                final success = await _firebaseDatabaseService.shareSpreadsheet(
+                  email,
+                  spreadsheetId,
+                  'Shared Spreadsheet',
+                );
+
+                if (context.mounted) {
+                  Navigator.pop(context);
+                  if (success) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Spreadsheet shared with $email!'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Failed to share spreadsheet.'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
+              }
+            },
+            child: const Text('Share'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1187,6 +1277,14 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     content: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        ListTile(
+                          leading: const Icon(Icons.share),
+                          title: const Text('Share Spreadsheet'),
+                          onTap: () {
+                            Navigator.pop(context);
+                            _showShareSpreadsheetDialog();
+                          },
+                        ),
                         ListTile(
                           leading: const Icon(Icons.email),
                           title: const Text('Account Info'),
@@ -1299,12 +1397,14 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     // ),
                     OutlinedButton.icon(
                       onPressed: () {
-                        if (_userEmail == null) return;
+                        final spreadsheetId = _spreadsheetIdController.text
+                            .trim();
+                        if (spreadsheetId.isEmpty) return;
                         Navigator.push(
                           context,
                           MaterialPageRoute(
                             builder: (context) =>
-                                EventsPage(userEmail: _userEmail!),
+                                EventsPage(spreadsheetId: spreadsheetId),
                           ),
                         );
                       },
