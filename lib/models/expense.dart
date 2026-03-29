@@ -10,8 +10,10 @@ class Expense {
   final DateTime timestamp;
   final String? paidBy;
   final bool isOneTimePurchase;
-  /// Email of user who added the row (sheet column J).
+  /// Email of user who added the row (common: column J; personal: column I).
   final String? addedByEmail;
+  /// Personal sheet only: home/common spreadsheet id this row is tied to (column J).
+  final String? linkedHomeSpreadsheetId;
 
   Expense({
     String? id,
@@ -24,6 +26,7 @@ class Expense {
     this.paidBy,
     this.isOneTimePurchase = false,
     this.addedByEmail,
+    this.linkedHomeSpreadsheetId,
   }) : id = id ?? const Uuid().v4(),
        timestamp = timestamp ?? DateTime.now();
 
@@ -39,6 +42,7 @@ class Expense {
       'paidBy': paidBy ?? '',
       'isOneTimePurchase': isOneTimePurchase,
       'addedByEmail': addedByEmail ?? '',
+      'linkedHomeSpreadsheetId': linkedHomeSpreadsheetId ?? '',
     };
   }
 
@@ -54,6 +58,22 @@ class Expense {
       paidBy ?? '',
       isOneTimePurchase ? 'TRUE' : 'FALSE',
       addedByEmail?.trim() ?? '',
+    ];
+  }
+
+  /// Personal sheet layout: no Paid By; last column is linked home sheet id (A–J).
+  List<String> toPersonalRow() {
+    return [
+      id,
+      label,
+      price.toStringAsFixed(0),
+      category ?? '',
+      note ?? '',
+      expenseDate.toIso8601String().split('T')[0],
+      timestamp.toIso8601String(),
+      isOneTimePurchase ? 'TRUE' : 'FALSE',
+      addedByEmail?.trim() ?? '',
+      linkedHomeSpreadsheetId?.trim() ?? '',
     ];
   }
 
@@ -76,7 +96,9 @@ class Expense {
           ? map['isOneTimePurchase'] as bool
           : (map['isOneTimePurchase']?.toString().toUpperCase() == 'TRUE' || 
              map['isOneTimePurchase']?.toString() == '1'),
-      addedByEmail = _parseOptionalString(map['addedByEmail']);
+      addedByEmail = _parseOptionalString(map['addedByEmail']),
+      linkedHomeSpreadsheetId =
+          _parseOptionalString(map['linkedHomeSpreadsheetId']);
 
   static String? _parseOptionalString(dynamic v) {
     if (v == null) return null;

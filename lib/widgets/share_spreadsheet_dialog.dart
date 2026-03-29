@@ -150,6 +150,7 @@ class _ShareSpreadsheetDialogState extends State<ShareSpreadsheetDialog> {
   bool _loading = true;
   bool _sharing = false;
   String? _retryEmail;
+  bool _personalSheetNoShare = false;
 
   String _sheetTitle = '';
   List<Map<String, dynamic>> _members = [];
@@ -172,7 +173,18 @@ class _ShareSpreadsheetDialogState extends State<ShareSpreadsheetDialog> {
     setState(() {
       _loading = true;
       _driveListError = null;
+      _personalSheetNoShare = false;
     });
+
+    if (await widget.firebaseDatabaseService
+        .isSpreadsheetPersonal(widget.spreadsheetId)) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _personalSheetNoShare = true;
+      });
+      return;
+    }
 
     final meta = await widget.firebaseDatabaseService
         .getSpreadsheetMeta(widget.spreadsheetId);
@@ -360,7 +372,15 @@ class _ShareSpreadsheetDialogState extends State<ShareSpreadsheetDialog> {
                 padding: EdgeInsets.all(24),
                 child: Center(child: CircularProgressIndicator()),
               )
-            : SingleChildScrollView(
+            : _personalSheetNoShare
+                ? const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Text(
+                      'Personal sheets cannot be shared from the app. '
+                      'Open sharing for your home (common) sheet instead.',
+                    ),
+                  )
+                : SingleChildScrollView(
                 child: Form(
                   key: _formKey,
                   child: Column(

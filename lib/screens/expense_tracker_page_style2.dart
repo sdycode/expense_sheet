@@ -1,6 +1,8 @@
 import 'package:MoneyTracker/models/expense.dart';
 import 'package:MoneyTracker/models/frequent_expense_item.dart';
+import 'package:MoneyTracker/models/spreadsheet_sheet_kind.dart';
 import 'package:MoneyTracker/screens/events_page.dart';
+import 'package:MoneyTracker/screens/expense_sheet_settings_screen.dart';
 import 'package:MoneyTracker/screens/frequent_expense_items_page.dart';
 import 'package:MoneyTracker/screens/Spread_sheet_Selection_Screen.dart';
 import 'package:MoneyTracker/services/services_module.dart';
@@ -13,6 +15,7 @@ import 'package:flutter/services.dart';
 import 'dart:convert';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 class ExpenseTrackerPageStyle2 extends StatefulWidget {
   const ExpenseTrackerPageStyle2({super.key});
@@ -33,7 +36,8 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   final _formKey = GlobalKey<FormState>();
   final _priceController = TextEditingController();
   final _noteController = TextEditingController();
-  final _spreadsheetIdController = TextEditingController();
+  final _commonSpreadsheetIdController = TextEditingController();
+  final _personalSpreadsheetIdController = TextEditingController();
 
   DateTime _selectedDate = DateTime.now();
   String? _selectedCategory;
@@ -42,9 +46,12 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   bool _isLoading = false;
   bool _isSignedIn = false;
   String? _userEmail;
-  String? _verifiedSpreadsheetName;
+  String? _verifiedCommonName;
+  String? _verifiedPersonalName;
+  bool _showHomePersonalToggle = true;
+  bool _includeHomeSheet = true;
+  bool _defaultIncludeHomeWhenHidden = true;
   List<SpreadsheetInfo> _savedSpreadsheets = [];
-  String? _selectedSpreadsheetId;
   List<String> _personNames = [];
   bool _isLoadingPersonNames = false;
   List<Expense> _expensesToUpdate = [];
@@ -56,9 +63,34 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   bool _labelCountMapLoadTriggered = false;
   TextEditingController? _autocompleteLabelController;
 
+  bool get _effectiveIncludeHome =>
+      _showHomePersonalToggle ? _includeHomeSheet : _defaultIncludeHomeWhenHidden;
+
+  Future<void> _loadExpenseUiSettings() async {
+    final show =
+        await ExpenseSettingsStorage.instance.getShowHomePersonalToggle();
+    final def = await ExpenseSettingsStorage.instance
+        .getDefaultIncludeHomeWhenHidden();
+    if (!mounted) return;
+    setState(() {
+      _showHomePersonalToggle = show;
+      _defaultIncludeHomeWhenHidden = def;
+      if (!show) _includeHomeSheet = def;
+    });
+  }
+
+  List<SpreadsheetInfo> get _savedCommonSheets => _savedSpreadsheets
+      .where((s) => s.sheetKind != 'personal')
+      .toList();
+
+  List<SpreadsheetInfo> get _savedPersonalSheets => _savedSpreadsheets
+      .where((s) => s.sheetKind == 'personal')
+      .toList();
+
   @override
   void initState() {
     super.initState();
+    _loadExpenseUiSettings();
     _loadSavedSpreadsheets();
     _checkSignInStatus();
 
@@ -77,45 +109,80 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
   Future<void> _loadSavedSpreadsheets() async {
     try {
+      await _storageService.migrateLegacyActiveSheetIdIfNeeded();
       final spreadsheets = await _storageService.getSavedSpreadsheets();
-      final activeId = await _storageService.getActiveSpreadsheetId();
+      final commonActive = await _storageService.getActiveCommonSheetId();
+      final personalActive = await _storageService.getActivePersonalSheetId();
+
+      SpreadsheetInfo? pickCommon() {
+        if (commonActive != null && commonActive.isNotEmpty) {
+          try {
+            return spreadsheets.firstWhere((s) => s.id == commonActive);
+          } catch (_) {}
+        }
+        try {
+          return spreadsheets.firstWhere((s) => s.sheetKind != 'personal');
+        } catch (_) {
+          return spreadsheets.isNotEmpty ? spreadsheets.first : null;
+        }
+      }
+
+      SpreadsheetInfo? pickPersonal() {
+        if (personalActive != null && personalActive.isNotEmpty) {
+          try {
+            return spreadsheets.firstWhere((s) => s.id == personalActive);
+          } catch (_) {}
+        }
+        try {
+          return spreadsheets.firstWhere((s) => s.sheetKind == 'personal');
+        } catch (_) {
+          return null;
+        }
+      }
+
+      final defaultCommon = pickCommon();
+      final defaultPersonal = pickPersonal();
+
       setState(() {
         _savedSpreadsheets = spreadsheets;
-        if (spreadsheets.isNotEmpty) {
-          SpreadsheetInfo? preferred;
-          if (activeId != null && activeId.isNotEmpty) {
-            try {
-              preferred = spreadsheets.firstWhere((s) => s.id == activeId);
-            } catch (_) {}
-          }
-          final firstSpreadsheet = preferred ?? spreadsheets.first;
-          if (_spreadsheetIdController.text.trim().isEmpty) {
-            _spreadsheetIdController.text = firstSpreadsheet.id;
-            _selectedSpreadsheetId = firstSpreadsheet.id;
-            _verifiedSpreadsheetName =
-                firstSpreadsheet.name ?? 'Unnamed Spreadsheet';
-            if (_isSignedIn) {
-              _sheetsService.setSpreadsheetId(firstSpreadsheet.id);
-              _loadPersonNames();
-              _loadExpensesToUpdate();
-            }
-          } else {
-            final currentId = _spreadsheetIdController.text.trim();
-            try {
-              final matching = spreadsheets.firstWhere(
-                (s) => s.id == currentId,
-              );
-              _selectedSpreadsheetId = matching.id;
-              _verifiedSpreadsheetName = matching.name ?? 'Unnamed Spreadsheet';
-              if (_isSignedIn) {
-                _sheetsService.setSpreadsheetId(currentId);
-                _loadPersonNames();
-                _loadExpensesToUpdate();
-              }
-            } catch (e) {}
-          }
+
+        if (_commonSpreadsheetIdController.text.trim().isEmpty &&
+            defaultCommon != null) {
+          _commonSpreadsheetIdController.text = defaultCommon.id;
+          _verifiedCommonName =
+              defaultCommon.name ?? 'Unnamed Spreadsheet';
+        } else if (_commonSpreadsheetIdController.text.trim().isNotEmpty) {
+          try {
+            final m = spreadsheets.firstWhere(
+              (s) => s.id == _commonSpreadsheetIdController.text.trim(),
+            );
+            _verifiedCommonName = m.name ?? 'Unnamed Spreadsheet';
+          } catch (_) {}
+        }
+
+        if (_personalSpreadsheetIdController.text.trim().isEmpty &&
+            defaultPersonal != null) {
+          _personalSpreadsheetIdController.text = defaultPersonal.id;
+          _verifiedPersonalName = defaultPersonal.name;
+        } else if (_personalSpreadsheetIdController.text.trim().isNotEmpty) {
+          try {
+            final m = spreadsheets.firstWhere(
+              (s) => s.id == _personalSpreadsheetIdController.text.trim(),
+            );
+            _verifiedPersonalName = m.name;
+          } catch (_) {}
         }
       });
+
+      if (_isSignedIn) {
+        final cid = _commonSpreadsheetIdController.text.trim();
+        if (cid.isNotEmpty) {
+          _sheetsService.setSpreadsheetId(cid);
+          _loadPersonNames();
+          _loadExpensesToUpdate();
+          _loadFrequentItems();
+        }
+      }
     } catch (e) {
       debugPrint('Error loading saved spreadsheets: $e');
     }
@@ -136,7 +203,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   }
 
   Future<void> _loadFrequentItems() async {
-    final spreadsheetId = _spreadsheetIdController.text.trim();
+    final spreadsheetId = _commonSpreadsheetIdController.text.trim();
     if (!_isSignedIn || spreadsheetId.isEmpty) {
       setState(() => _frequentItems = []);
       return;
@@ -193,7 +260,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   }
 
   Future<void> _openFrequentExpenseItemsPage() async {
-    final spreadsheetId = _spreadsheetIdController.text.trim();
+    final spreadsheetId = _commonSpreadsheetIdController.text.trim();
     if (spreadsheetId.isEmpty) return;
     await Navigator.push(
       context,
@@ -206,7 +273,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   }
 
   Future<void> _loadPersonNames() async {
-    final spreadsheetId = _spreadsheetIdController.text.trim();
+    final spreadsheetId = _commonSpreadsheetIdController.text.trim();
     if (!_isSignedIn || spreadsheetId.isEmpty) {
       setState(() => _isLoadingPersonNames = false);
       return;
@@ -269,17 +336,30 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   }
 
   Future<void> _loadSpreadsheetNameIfExists() async {
-    final spreadsheetId = _spreadsheetIdController.text.trim();
+    final spreadsheetId = _commonSpreadsheetIdController.text.trim();
     if (spreadsheetId.isNotEmpty) {
       try {
         final saved = await _storageService.getSpreadsheet(spreadsheetId);
         if (saved != null && mounted) {
           setState(() {
-            _verifiedSpreadsheetName = saved.name ?? 'Unnamed Spreadsheet';
+            _verifiedCommonName = saved.name ?? 'Unnamed Spreadsheet';
           });
         }
       } catch (e) {
         debugPrint('Error loading spreadsheet name: $e');
+      }
+    }
+    final pid = _personalSpreadsheetIdController.text.trim();
+    if (pid.isNotEmpty) {
+      try {
+        final saved = await _storageService.getSpreadsheet(pid);
+        if (saved != null && mounted) {
+          setState(() {
+            _verifiedPersonalName = saved.name;
+          });
+        }
+      } catch (e) {
+        debugPrint('Error loading personal spreadsheet name: $e');
       }
     }
   }
@@ -430,8 +510,8 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       setState(() {
         _isSignedIn = false;
         _userEmail = null;
-        _verifiedSpreadsheetName = null;
-        _selectedSpreadsheetId = null;
+        _verifiedCommonName = null;
+        _verifiedPersonalName = null;
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -467,7 +547,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     }
   }
 
-  Future<void> _openSpreadsheetPicker() async {
+  Future<void> _openSpreadsheetPicker(SpreadsheetPickerPurpose purpose) async {
     if (!_isSignedIn) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please sign in first')),
@@ -490,185 +570,242 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     final r = await Navigator.push<SpreadsheetPickerResult>(
       context,
       MaterialPageRoute(
-        builder: (ctx) =>
-            SpreadsheetPickerScreen(sheetsService: _sheetsService),
+        builder: (ctx) => SpreadsheetPickerScreen(
+          sheetsService: _sheetsService,
+          purpose: purpose,
+        ),
       ),
     );
     if (!mounted || r == null) return;
-    await _storageService.setActiveSpreadsheetId(r.spreadsheetId);
-    setState(() {
-      _spreadsheetIdController.text = r.spreadsheetId;
-      _verifiedSpreadsheetName = r.name ?? 'Spreadsheet';
-      _selectedSpreadsheetId = r.spreadsheetId;
-    });
-    _sheetsService.setSpreadsheetId(r.spreadsheetId);
-    _loadPersonNames();
-    _loadExpensesToUpdate();
+    if (purpose == SpreadsheetPickerPurpose.common) {
+      await _storageService.setActiveCommonSheetId(r.spreadsheetId);
+      setState(() {
+        _commonSpreadsheetIdController.text = r.spreadsheetId;
+        _verifiedCommonName = r.name ?? 'Spreadsheet';
+      });
+      _sheetsService.setSpreadsheetId(r.spreadsheetId);
+      _loadPersonNames();
+      _loadExpensesToUpdate();
+      _loadFrequentItems();
+    } else {
+      await _storageService.setActivePersonalSheetId(r.spreadsheetId);
+      setState(() {
+        _personalSpreadsheetIdController.text = r.spreadsheetId;
+        _verifiedPersonalName = r.name;
+      });
+    }
   }
 
   Future<void> _showSpreadsheetDialog() async {
-    await showDialog(
+    await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Spreadsheet'),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Spreadsheets'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const Text(
+                'Home / shared (10 columns)',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
               TextFormField(
-                controller: _spreadsheetIdController,
+                controller: _commonSpreadsheetIdController,
                 decoration: InputDecoration(
-                  labelText: 'Google Spreadsheet ID *',
-                  hintText: 'Enter your Google Sheet ID',
+                  labelText: 'Home spreadsheet ID',
                   border: const OutlineInputBorder(),
-                  prefixIcon: const Icon(Icons.table_chart),
+                  prefixIcon: const Icon(Icons.groups),
                   contentPadding: const EdgeInsets.all(2),
-                  helperText: _verifiedSpreadsheetName != null
-                      ? 'Sheet: $_verifiedSpreadsheetName'
-                      : 'Click Check to verify and save',
+                  helperText: _verifiedCommonName != null
+                      ? 'Sheet: $_verifiedCommonName'
+                      : 'Verify to save',
                   helperMaxLines: 2,
                 ),
-                onChanged: (value) {
-                  if (_verifiedSpreadsheetName != null) {
-                    setState(() {
-                      _verifiedSpreadsheetName = null;
-                      _selectedSpreadsheetId = null;
-                    });
-                  }
-                },
+                onChanged: (_) => setState(() => _verifiedCommonName = null),
               ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: _isSignedIn
-                    ? () async {
-                        Navigator.pop(context);
-                        await _openSpreadsheetPicker();
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: _isSignedIn
+                        ? () async {
+                            Navigator.pop(dialogContext);
+                            await _openSpreadsheetPicker(
+                              SpreadsheetPickerPurpose.common,
+                            );
+                          }
+                        : null,
+                    icon: const Icon(Icons.folder_open, size: 18),
+                    label: const Text('Browse'),
+                  ),
+                  TextButton.icon(
+                    onPressed: _isLoading
+                        ? null
+                        : () => _checkAndSaveSpreadsheet(forPersonal: false),
+                    icon: const Icon(Icons.check_circle_outline, size: 18),
+                    label: const Text('Verify'),
+                  ),
+                ],
+              ),
+              if (_savedCommonSheets.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: PopupMenuButton<String>(
+                    tooltip: 'Saved home sheets',
+                    onSelected: (spreadsheetId) async {
+                      final spreadsheet = _savedCommonSheets.firstWhere(
+                        (s) => s.id == spreadsheetId,
+                      );
+                      await _storageService.setActiveCommonSheetId(
+                        spreadsheet.id,
+                      );
+                      setState(() {
+                        _commonSpreadsheetIdController.text = spreadsheet.id;
+                        _verifiedCommonName =
+                            spreadsheet.name ?? 'Unnamed Spreadsheet';
+                      });
+                      if (_isSignedIn) {
+                        _sheetsService.setSpreadsheetId(spreadsheet.id);
+                        _loadPersonNames();
+                        _loadExpensesToUpdate();
+                        _loadFrequentItems();
                       }
-                    : null,
-                icon: const Icon(Icons.folder_open),
-                label: const Text('Browse Google Drive'),
-              ),
-              if (_savedSpreadsheets.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    const Text('Saved:', style: TextStyle(fontSize: 12)),
-                    const SizedBox(width: 8),
-                    PopupMenuButton<String>(
-                      tooltip: 'Select saved spreadsheet',
-                      onSelected: (spreadsheetId) async {
-                        final spreadsheet = _savedSpreadsheets.firstWhere(
-                          (s) => s.id == spreadsheetId,
+                    },
+                    itemBuilder: (context) {
+                      return _savedCommonSheets.map((spreadsheet) {
+                        return PopupMenuItem<String>(
+                          value: spreadsheet.id,
+                          child: Text(
+                            spreadsheet.name ?? spreadsheet.id,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         );
-                        await _storageService.setActiveSpreadsheetId(
-                          spreadsheet.id,
-                        );
-                        setState(() {
-                          _spreadsheetIdController.text = spreadsheet.id;
-                          _selectedSpreadsheetId = spreadsheet.id;
-                          _verifiedSpreadsheetName =
-                              spreadsheet.name ?? 'Unnamed Spreadsheet';
-                        });
-                        if (_isSignedIn) {
-                          _sheetsService.setSpreadsheetId(spreadsheet.id);
-                          _loadPersonNames();
-                          _loadExpensesToUpdate();
-                        }
-                      },
-                      itemBuilder: (context) {
-                        return _savedSpreadsheets.map((spreadsheet) {
-                          return PopupMenuItem<String>(
-                            value: spreadsheet.id,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  spreadsheet.name ?? 'Unnamed Spreadsheet',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                Text(
-                                  spreadsheet.id,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: Colors.grey[600],
-                                    fontFamily: 'monospace',
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        }).toList();
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Icon(Icons.arrow_drop_down, size: 24),
+                      }).toList();
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Saved home', style: TextStyle(fontSize: 13)),
+                          Icon(Icons.arrow_drop_down),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 ),
-              ],
+              const Divider(height: 28),
+              const Text(
+                'Personal (10 columns)',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _personalSpreadsheetIdController,
+                decoration: InputDecoration(
+                  labelText: 'Personal spreadsheet ID (optional)',
+                  border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.person),
+                  contentPadding: const EdgeInsets.all(2),
+                  helperText: _verifiedPersonalName != null
+                      ? 'Sheet: $_verifiedPersonalName'
+                      : 'Owner only',
+                  helperMaxLines: 2,
+                ),
+                onChanged: (_) => setState(() => _verifiedPersonalName = null),
+              ),
+              Wrap(
+                spacing: 8,
+                children: [
+                  TextButton.icon(
+                    onPressed: _isSignedIn
+                        ? () async {
+                            Navigator.pop(dialogContext);
+                            await _openSpreadsheetPicker(
+                              SpreadsheetPickerPurpose.personal,
+                            );
+                          }
+                        : null,
+                    icon: const Icon(Icons.folder_open, size: 18),
+                    label: const Text('Browse'),
+                  ),
+                  TextButton.icon(
+                    onPressed: _isLoading
+                        ? null
+                        : () => _checkAndSaveSpreadsheet(forPersonal: true),
+                    icon: const Icon(Icons.check_circle_outline, size: 18),
+                    label: const Text('Verify'),
+                  ),
+                ],
+              ),
+              if (_savedPersonalSheets.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: PopupMenuButton<String>(
+                    tooltip: 'Saved personal sheets',
+                    onSelected: (spreadsheetId) async {
+                      final spreadsheet = _savedPersonalSheets.firstWhere(
+                        (s) => s.id == spreadsheetId,
+                      );
+                      await _storageService.setActivePersonalSheetId(
+                        spreadsheet.id,
+                      );
+                      setState(() {
+                        _personalSpreadsheetIdController.text = spreadsheet.id;
+                        _verifiedPersonalName = spreadsheet.name;
+                      });
+                    },
+                    itemBuilder: (context) {
+                      return _savedPersonalSheets.map((spreadsheet) {
+                        return PopupMenuItem<String>(
+                          value: spreadsheet.id,
+                          child: Text(
+                            spreadsheet.name ?? spreadsheet.id,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
+                      }).toList();
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Saved personal', style: TextStyle(fontSize: 13)),
+                          Icon(Icons.arrow_drop_down),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton.icon(
-            onPressed: _isLoading
-                ? null
-                : () async {
-                    if (_spreadsheetIdController.text.trim().isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Please enter Spreadsheet ID'),
-                          backgroundColor: Colors.orange,
-                        ),
-                      );
-                      return;
-                    }
-                    await _checkAndSaveSpreadsheet();
-                    try {
-                      if (mounted) Navigator.pop(context);
-                    } catch (e) {}
-                  },
-            icon: _isLoading
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.check_circle),
-            label: const Text('Check'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue,
-              foregroundColor: Colors.white,
-            ),
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Close'),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _checkAndSaveSpreadsheet() async {
-    final spreadsheetId = _spreadsheetIdController.text.trim();
+  Future<void> _checkAndSaveSpreadsheet({required bool forPersonal}) async {
+    final spreadsheetId = forPersonal
+        ? _personalSpreadsheetIdController.text.trim()
+        : _commonSpreadsheetIdController.text.trim();
 
     if (spreadsheetId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter Spreadsheet ID'),
+        SnackBar(
+          content: Text(
+            forPersonal
+                ? 'Please enter personal spreadsheet ID'
+                : 'Please enter home spreadsheet ID',
+          ),
           backgroundColor: Colors.orange,
         ),
       );
@@ -709,6 +846,28 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
         return;
       }
 
+      final layoutOk = forPersonal
+          ? await _sheetsService.isCompatiblePersonalExpenseSheet(
+              spreadsheetId,
+            )
+          : await _sheetsService.isCompatibleExpenseSheet(spreadsheetId);
+      if (!layoutOk) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                forPersonal
+                    ? 'Sheet1 headers must match the personal format (10 columns).'
+                    : 'Sheet1 headers must match the home (10-column) format.',
+              ),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
+      }
+
       String? spreadsheetName;
       try {
         spreadsheetName = await _sheetsService.getSpreadsheetName(
@@ -720,31 +879,47 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
       final existing = await _storageService.getSpreadsheet(spreadsheetId);
       final isNew = existing == null;
+      final kind = forPersonal
+          ? SpreadsheetSheetKind.personal
+          : SpreadsheetSheetKind.common;
 
       final spreadsheetInfo = SpreadsheetInfo(
         id: spreadsheetId,
         name: spreadsheetName,
         addedDate: existing?.addedDate ?? DateTime.now(),
+        sheetKind: kind.dbValue,
       );
 
       await _storageService.saveSpreadsheet(spreadsheetInfo);
-      await _storageService.setActiveSpreadsheetId(spreadsheetId);
+      if (forPersonal) {
+        await _storageService.setActivePersonalSheetId(spreadsheetId);
+      } else {
+        await _storageService.setActiveCommonSheetId(spreadsheetId);
+      }
       if (_userEmail != null && _userEmail!.isNotEmpty) {
         await _firebaseDatabaseService.registerSpreadsheetOwnership(
           ownerEmail: _userEmail!,
           spreadsheetId: spreadsheetId,
           displayName:
               spreadsheetName ?? spreadsheetInfo.name ?? 'Unnamed Spreadsheet',
+          sheetKind: kind,
         );
       }
-      _loadPersonNames();
+      if (!forPersonal) {
+        _loadPersonNames();
+      }
       setState(() {
-        _verifiedSpreadsheetName = spreadsheetName ?? 'Unnamed Spreadsheet';
-        _selectedSpreadsheetId = spreadsheetId;
+        if (forPersonal) {
+          _verifiedPersonalName = spreadsheetName ?? 'Unnamed Spreadsheet';
+        } else {
+          _verifiedCommonName = spreadsheetName ?? 'Unnamed Spreadsheet';
+        }
       });
 
       await _loadSavedSpreadsheets();
-      await _loadExpensesToUpdate();
+      if (!forPersonal) {
+        await _loadExpensesToUpdate();
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -779,7 +954,10 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     }
   }
 
-  Future<void> _autoSaveSpreadsheetIfNeeded(String spreadsheetId) async {
+  Future<void> _autoSaveSpreadsheetIfNeeded(
+    String spreadsheetId, {
+    required bool personalLayout,
+  }) async {
     try {
       final existing = await _storageService.getSpreadsheet(spreadsheetId);
       if (existing != null) return;
@@ -798,20 +976,30 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
         debugPrint('Could not get spreadsheet name: $e');
       }
 
+      final kind = personalLayout
+          ? SpreadsheetSheetKind.personal
+          : SpreadsheetSheetKind.common;
+
       final spreadsheetInfo = SpreadsheetInfo(
         id: spreadsheetId,
         name: spreadsheetName,
         addedDate: DateTime.now(),
+        sheetKind: kind.dbValue,
       );
 
       await _storageService.saveSpreadsheet(spreadsheetInfo);
-      await _storageService.setActiveSpreadsheetId(spreadsheetId);
+      if (personalLayout) {
+        await _storageService.setActivePersonalSheetId(spreadsheetId);
+      } else {
+        await _storageService.setActiveCommonSheetId(spreadsheetId);
+      }
       if (_userEmail != null && _userEmail!.isNotEmpty) {
         await _firebaseDatabaseService.registerSpreadsheetOwnership(
           ownerEmail: _userEmail!,
           spreadsheetId: spreadsheetId,
           displayName:
               spreadsheetName ?? spreadsheetInfo.name ?? 'Unnamed Spreadsheet',
+          sheetKind: kind,
         );
       }
 
@@ -843,18 +1031,69 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       return;
     }
 
-    if (_spreadsheetIdController.text.trim().isEmpty) {
+    final commonId = _commonSpreadsheetIdController.text.trim();
+    final personalId = _personalSpreadsheetIdController.text.trim();
+    final includeHome = _effectiveIncludeHome;
+
+    if (includeHome) {
+      if (commonId.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Set a home (shared) spreadsheet ID.'),
+          ),
+        );
+        return;
+      }
+      if (personalId.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Set a personal spreadsheet ID to save to both sheets.',
+            ),
+          ),
+        );
+        return;
+      }
+    } else {
+      if (personalId.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Set a personal spreadsheet ID.')),
+        );
+        return;
+      }
+    }
+
+    final userEmail = _userEmail?.trim() ?? '';
+    if (userEmail.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter Spreadsheet ID')),
+        const SnackBar(content: Text('Sign in again to add expenses.')),
       );
       return;
     }
 
-    final spreadsheetId = _spreadsheetIdController.text.trim();
+    final canPersonal = await _firebaseDatabaseService.userCanWritePersonalSheet(
+      personalId,
+      userEmail,
+    );
+    if (!canPersonal) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'You can only write to a personal sheet you own.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
 
-    _sheetsService.setSpreadsheetId(spreadsheetId);
+    _sheetsService.setSpreadsheetId(includeHome ? commonId : personalId);
 
+    final expenseId = const Uuid().v4();
     final expense = Expense(
+      id: expenseId,
       label: _autocompleteLabelController?.text.trim() ?? '',
       price: double.parse(_priceController.text.trim()),
       category: _selectedCategory,
@@ -862,9 +1101,11 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
           ? null
           : _noteController.text.trim(),
       expenseDate: _selectedDate,
-      paidBy: _selectedPaidBy,
+      paidBy: includeHome ? _selectedPaidBy : null,
       isOneTimePurchase: _isOneTimePurchase,
       addedByEmail: FirebaseAuth.instance.currentUser?.email,
+      linkedHomeSpreadsheetId:
+          commonId.isEmpty ? null : commonId,
     );
 
     _autocompleteLabelController?.clear();
@@ -887,46 +1128,189 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       );
     }
 
-    _uploadExpenseToSheet(expense, spreadsheetId);
+    await _uploadExpenseToSheet(
+      expense,
+      commonId: commonId,
+      personalId: personalId,
+      includeHome: includeHome,
+    );
   }
 
   Future<void> _uploadExpenseToSheet(
-    Expense expense,
-    String spreadsheetId,
-  ) async {
+    Expense expense, {
+    required String commonId,
+    required String personalId,
+    required bool includeHome,
+  }) async {
     try {
-      final success = await _sheetsService.addExpense(expense);
-
-      if (success) {
-        await _autoSaveSpreadsheetIfNeeded(spreadsheetId);
-        _loadPersonNames();
-        _loadExpensesToUpdate(); // refresh label suggestions
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Expense synced to sheet successfully!'),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 2),
-            ),
+      if (includeHome) {
+        var commonOk = false;
+        var personalOk = false;
+        try {
+          commonOk = await _sheetsService.addExpenseTo(
+            commonId,
+            expense,
+            personalLayout: false,
           );
+        } catch (e, st) {
+          debugPrint('add common: $e\n$st');
         }
-      } else {
-        if (mounted) {
+        try {
+          personalOk = await _sheetsService.addExpenseTo(
+            personalId,
+            expense,
+            personalLayout: true,
+          );
+        } catch (e, st) {
+          debugPrint('add personal: $e\n$st');
+        }
+
+        if (commonOk && personalOk) {
+          await _autoSaveSpreadsheetIfNeeded(commonId, personalLayout: false);
+          await _autoSaveSpreadsheetIfNeeded(personalId, personalLayout: true);
+          _loadPersonNames();
+          _loadExpensesToUpdate();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Expense synced to home and personal sheets.'),
+                backgroundColor: Colors.green,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        } else if (commonOk && !personalOk) {
+          await _autoSaveSpreadsheetIfNeeded(commonId, personalLayout: false);
+          _loadPersonNames();
+          _loadExpensesToUpdate();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                  'Saved to home sheet only; personal sheet sync failed.',
+                ),
+                backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 6),
+                action: SnackBarAction(
+                  label: 'Retry',
+                  textColor: Colors.white,
+                  onPressed: () => _uploadExpenseToSheet(
+                    expense,
+                    commonId: commonId,
+                    personalId: personalId,
+                    includeHome: true,
+                  ),
+                ),
+              ),
+            );
+          }
+        } else if (!commonOk && personalOk) {
+          await _autoSaveSpreadsheetIfNeeded(personalId, personalLayout: true);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                  'Saved to personal sheet only; home sheet sync failed.',
+                ),
+                backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 6),
+                action: SnackBarAction(
+                  label: 'Retry',
+                  textColor: Colors.white,
+                  onPressed: () => _uploadExpenseToSheet(
+                    expense,
+                    commonId: commonId,
+                    personalId: personalId,
+                    includeHome: true,
+                  ),
+                ),
+              ),
+            );
+          }
+        } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text(
-                'Failed to sync expense to sheet. Please check your connection and try again.',
+                'Could not sync to either sheet. Check connection and IDs.',
               ),
-              backgroundColor: Colors.orange,
+              backgroundColor: Colors.red,
               duration: const Duration(seconds: 5),
               action: SnackBarAction(
                 label: 'Retry',
                 textColor: Colors.white,
-                onPressed: () => _uploadExpenseToSheet(expense, spreadsheetId),
+                onPressed: () => _uploadExpenseToSheet(
+                  expense,
+                  commonId: commonId,
+                  personalId: personalId,
+                  includeHome: true,
+                ),
               ),
             ),
           );
+        }
+      } else {
+        try {
+          final ok = await _sheetsService.addExpenseTo(
+            personalId,
+            expense,
+            personalLayout: true,
+          );
+          if (ok) {
+            await _autoSaveSpreadsheetIfNeeded(
+              personalId,
+              personalLayout: true,
+            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Expense synced to personal sheet.'),
+                  backgroundColor: Colors.green,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          } else if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text(
+                  'Failed to sync expense. Please check connection.',
+                ),
+                backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 5),
+                action: SnackBarAction(
+                  label: 'Retry',
+                  textColor: Colors.white,
+                  onPressed: () => _uploadExpenseToSheet(
+                    expense,
+                    commonId: commonId,
+                    personalId: personalId,
+                    includeHome: false,
+                  ),
+                ),
+              ),
+            );
+          }
+        } catch (e) {
+          debugPrint('personal-only upload: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error: ${e.toString()}'),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 5),
+                action: SnackBarAction(
+                  label: 'Retry',
+                  textColor: Colors.white,
+                  onPressed: () => _uploadExpenseToSheet(
+                    expense,
+                    commonId: commonId,
+                    personalId: personalId,
+                    includeHome: false,
+                  ),
+                ),
+              ),
+            );
+          }
         }
       }
     } catch (e, stackTrace) {
@@ -937,11 +1321,6 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
             content: Text('Error syncing expense: ${e.toString()}'),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 5),
-            action: SnackBarAction(
-              label: 'Retry',
-              textColor: Colors.white,
-              onPressed: () => _uploadExpenseToSheet(expense, spreadsheetId),
-            ),
           ),
         );
       }
@@ -1004,7 +1383,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   }
 
   Future<void> _loadExpensesToUpdate() async {
-    if (!_isSignedIn || _spreadsheetIdController.text.trim().isEmpty) {
+    if (!_isSignedIn || _commonSpreadsheetIdController.text.trim().isEmpty) {
       setState(() {
         _expensesToUpdate = [];
         _labelCountMap = {};
@@ -1016,7 +1395,11 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     setState(() => _isLoadingExpenses = true);
 
     try {
-      final expenses = await _sheetsService.getExpenses();
+      final cid = _commonSpreadsheetIdController.text.trim();
+      final expenses = await _sheetsService.getExpensesFor(
+        cid,
+        personalLayout: false,
+      );
       // Build label -> count for suggestions (from all expenses)
       final labelCountMap = <String, int>{};
       for (final e in expenses) {
@@ -1064,7 +1447,12 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
         addedByEmail: expense.addedByEmail,
       );
 
-      await _sheetsService.updateExpense(updatedExpense);
+      final cid = _commonSpreadsheetIdController.text.trim();
+      await _sheetsService.updateExpenseFor(
+        cid,
+        updatedExpense,
+        personalLayout: false,
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1119,7 +1507,12 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
             addedByEmail: expense.addedByEmail,
           );
 
-          await _sheetsService.updateExpense(updatedExpense);
+          final cid = _commonSpreadsheetIdController.text.trim();
+          await _sheetsService.updateExpenseFor(
+            cid,
+            updatedExpense,
+            personalLayout: false,
+          );
           updatedCount++;
         }
       }
@@ -1200,8 +1593,22 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
       setState(() => _isLoading = true);
       try {
+        final homeId = _commonSpreadsheetIdController.text.trim();
+        if (homeId.isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Set a home spreadsheet ID to store paid-by names.',
+                ),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+          return;
+        }
         final success = await _firebaseDatabaseService.addPaidByPerson(
-          _userEmail!,
+          homeId,
           result,
         );
         if (success) {
@@ -1247,16 +1654,31 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     // _autocompleteLabelController is owned by Autocomplete, do not dispose
     _priceController.dispose();
     _noteController.dispose();
-    _spreadsheetIdController.dispose();
+    _commonSpreadsheetIdController.dispose();
+    _personalSpreadsheetIdController.dispose();
     super.dispose();
   }
 
+  Future<void> _openExpenseSheetSettings() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const ExpenseSheetSettingsScreen(),
+      ),
+    );
+    if (!mounted) return;
+    await _loadExpenseUiSettings();
+    await _loadSavedSpreadsheets();
+  }
+
   Future<void> _showShareSpreadsheetDialog() async {
-    final spreadsheetId = _spreadsheetIdController.text.trim();
+    final spreadsheetId = _commonSpreadsheetIdController.text.trim();
 
     if (spreadsheetId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a spreadsheet ID first.')),
+        const SnackBar(
+          content: Text('Set a home (shared) spreadsheet ID to use sharing.'),
+        ),
       );
       return;
     }
@@ -1268,10 +1690,23 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       return;
     }
 
+    if (await _firebaseDatabaseService.isSpreadsheetPersonal(spreadsheetId)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Sharing applies to home sheets only. Switch to your home sheet ID.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
     await ShareSpreadsheetDialog.show(
       context,
       spreadsheetId: spreadsheetId,
-      fallbackSheetName: _verifiedSpreadsheetName ?? 'Shared spreadsheet',
+      fallbackSheetName: _verifiedCommonName ?? 'Shared spreadsheet',
       ownerEmail: _userEmail!,
       firebaseDatabaseService: _firebaseDatabaseService,
       driveShareService: _driveShareService,
@@ -1302,6 +1737,14 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     content: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        ListTile(
+                          leading: const Icon(Icons.settings),
+                          title: const Text('Expense sheet settings'),
+                          onTap: () {
+                            Navigator.pop(context);
+                            _openExpenseSheetSettings();
+                          },
+                        ),
                         ListTile(
                           leading: const Icon(Icons.share),
                           title: const Text('Share Spreadsheet'),
@@ -1398,14 +1841,14 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
               if (_isSignedIn) ...[
                 // Load label suggestions from sheet when form is shown and map is empty (once)
                 if (_labelCountMap.isEmpty &&
-                    _spreadsheetIdController.text.trim().isNotEmpty &&
+                    _commonSpreadsheetIdController.text.trim().isNotEmpty &&
                     !_labelCountMapLoadTriggered)
                   Builder(
                     builder: (context) {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted &&
                             _labelCountMap.isEmpty &&
-                            _spreadsheetIdController.text.trim().isNotEmpty &&
+                            _commonSpreadsheetIdController.text.trim().isNotEmpty &&
                             !_labelCountMapLoadTriggered) {
                           _labelCountMapLoadTriggered = true;
                           _loadExpensesToUpdate();
@@ -1422,7 +1865,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     // ),
                     OutlinedButton.icon(
                       onPressed: () {
-                        final spreadsheetId = _spreadsheetIdController.text
+                        final spreadsheetId = _commonSpreadsheetIdController.text
                             .trim();
                         if (spreadsheetId.isEmpty) return;
                         Navigator.push(
@@ -1668,7 +2111,23 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 ),
                 const SizedBox(height: 16),
 
-                // Paid By: wrap + add button
+                if (_showHomePersonalToggle)
+                  CheckboxListTile(
+                    value: _includeHomeSheet,
+                    onChanged: (v) {
+                      setState(() => _includeHomeSheet = v ?? true);
+                    },
+                    title: const Text('Also add to home / shared sheet'),
+                    subtitle: const Text(
+                      'Unchecked: personal sheet only (same expense ID when both are used).',
+                    ),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                if (_showHomePersonalToggle) const SizedBox(height: 8),
+
+                // Paid By: wrap + add button (home sheet column only)
+                if (_effectiveIncludeHome)
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1751,7 +2210,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
+                if (_effectiveIncludeHome) const SizedBox(height: 24),
 
                 // Submit Button
                 ElevatedButton(

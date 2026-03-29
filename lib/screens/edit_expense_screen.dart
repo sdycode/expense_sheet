@@ -11,12 +11,14 @@ class EditExpenseScreen extends StatefulWidget {
   final Expense expense;
   final GoogleSheetsService sheetsService;
   final String spreadsheetId;
+  final bool personalLayout;
 
   const EditExpenseScreen({
     super.key,
     required this.expense,
     required this.sheetsService,
     required this.spreadsheetId,
+    this.personalLayout = false,
   });
 
   @override
@@ -173,9 +175,12 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
           : _noteController.text.trim(),
       expenseDate: _selectedDate,
       timestamp: widget.expense.timestamp, // Keep original timestamp
-      paidBy: _selectedPaidBy,
+      paidBy: widget.personalLayout ? null : _selectedPaidBy,
       isOneTimePurchase: _isOneTimePurchase,
       addedByEmail: widget.expense.addedByEmail,
+      linkedHomeSpreadsheetId: widget.personalLayout
+          ? widget.expense.linkedHomeSpreadsheetId
+          : null,
     );
 
     // Save event links in Firebase (expense can belong to multiple events)
@@ -208,7 +213,11 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
       debugPrint(
         'EditExpenseScreen: Updating expense in sheet: ${expense.toMap()}',
       );
-      await widget.sheetsService.updateExpense(expense);
+      await widget.sheetsService.updateExpenseFor(
+        widget.spreadsheetId,
+        expense,
+        personalLayout: widget.personalLayout,
+      );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -409,64 +418,64 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 16),
-              // Paid By (Optional)
-              _isLoadingPersonNames
-                  ? const LinearProgressIndicator()
-                  : Row(
-                      children: [
-                        Expanded(
-                          child: DropdownButtonFormField<String>(
-                            // Only set value if it exists in the list to avoid duplicate value error
-                            value:
-                                _selectedPaidBy != null &&
-                                    _selectedPaidBy!.isNotEmpty &&
-                                    _personNames.contains(_selectedPaidBy)
-                                ? _selectedPaidBy
-                                : null,
-                            decoration: const InputDecoration(
-                              labelText: 'Paid By (Optional)',
-                              border: OutlineInputBorder(),
-                              prefixIcon: Icon(Icons.person, size: 20),
-                            ),
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Colors.black,
-                            ),
-                            items: [
-                              const DropdownMenuItem(
-                                value: null,
-                                child: Text(
-                                  'None',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.black,
-                                  ),
-                                ),
+              if (!widget.personalLayout) ...[
+                const SizedBox(height: 16),
+                _isLoadingPersonNames
+                    ? const LinearProgressIndicator()
+                    : Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              value:
+                                  _selectedPaidBy != null &&
+                                      _selectedPaidBy!.isNotEmpty &&
+                                      _personNames.contains(_selectedPaidBy)
+                                  ? _selectedPaidBy
+                                  : null,
+                              decoration: const InputDecoration(
+                                labelText: 'Paid By (Optional)',
+                                border: OutlineInputBorder(),
+                                prefixIcon: Icon(Icons.person, size: 20),
                               ),
-                              ..._personNames.map((name) {
-                                return DropdownMenuItem(
-                                  value: name,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: Colors.black,
+                              ),
+                              items: [
+                                const DropdownMenuItem(
+                                  value: null,
                                   child: Text(
-                                    name,
-                                    style: const TextStyle(
+                                    'None',
+                                    style: TextStyle(
                                       fontSize: 14,
                                       color: Colors.black,
                                     ),
-                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                );
-                              }),
-                            ],
-                            onChanged: (value) {
-                              setState(() {
-                                _selectedPaidBy = value;
-                              });
-                            },
+                                ),
+                                ..._personNames.map((name) {
+                                  return DropdownMenuItem(
+                                    value: name,
+                                    child: Text(
+                                      name,
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        color: Colors.black,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  );
+                                }),
+                              ],
+                              onChanged: (value) {
+                                setState(() {
+                                  _selectedPaidBy = value;
+                                });
+                              },
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+              ],
               const SizedBox(height: 16),
 
               // Note (Optional)

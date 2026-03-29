@@ -6,11 +6,14 @@ class SpreadsheetInfo {
   final String id;
   final String? name;
   final DateTime addedDate;
+  /// `common` | `personal` from Firebase; optional for legacy local data.
+  final String? sheetKind;
 
   SpreadsheetInfo({
     required this.id,
     this.name,
     required this.addedDate,
+    this.sheetKind,
   });
 
   Map<String, dynamic> toJson() {
@@ -18,6 +21,7 @@ class SpreadsheetInfo {
       'id': id,
       'name': name,
       'addedDate': addedDate.toIso8601String(),
+      if (sheetKind != null) 'sheetKind': sheetKind,
     };
   }
 
@@ -26,6 +30,7 @@ class SpreadsheetInfo {
       id: json['id'] as String,
       name: json['name'] as String?,
       addedDate: DateTime.parse(json['addedDate'] as String),
+      sheetKind: json['sheetKind'] as String?,
     );
   }
 }
@@ -38,6 +43,9 @@ class SpreadsheetStorageService {
 
   static const String _key = 'saved_spreadsheets';
   static const String _activeSpreadsheetIdKey = 'active_spreadsheet_id';
+  static const String _activeCommonSheetIdKey = 'active_common_sheet_id';
+  static const String _activePersonalSheetIdKey = 'active_personal_sheet_id';
+  static const String _legacyActiveMigratedKey = 'legacy_active_sheet_migrated';
 
   Future<List<SpreadsheetInfo>> getSavedSpreadsheets() async {
     try {
@@ -111,37 +119,94 @@ class SpreadsheetStorageService {
     }
   }
 
-  /// Last spreadsheet the user chose for the expense tracker (highlights picker card).
-  Future<String?> getActiveSpreadsheetId() async {
+  /// One-time: copy legacy [active_spreadsheet_id] into common active id.
+  Future<void> migrateLegacyActiveSheetIdIfNeeded() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final id = prefs.getString(_activeSpreadsheetIdKey);
+      if (prefs.getBool(_legacyActiveMigratedKey) == true) return;
+      final common = prefs.getString(_activeCommonSheetIdKey);
+      if (common != null && common.isNotEmpty) {
+        await prefs.setBool(_legacyActiveMigratedKey, true);
+        return;
+      }
+      final legacy = prefs.getString(_activeSpreadsheetIdKey);
+      if (legacy != null && legacy.trim().isNotEmpty) {
+        await prefs.setString(_activeCommonSheetIdKey, legacy.trim());
+      }
+      await prefs.setBool(_legacyActiveMigratedKey, true);
+    } catch (e) {
+      debugPrint('migrateLegacyActiveSheetIdIfNeeded: $e');
+    }
+  }
+
+  Future<String?> getActiveCommonSheetId() async {
+    await migrateLegacyActiveSheetIdIfNeeded();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = prefs.getString(_activeCommonSheetIdKey);
       if (id == null || id.trim().isEmpty) return null;
       return id.trim();
     } catch (e) {
-      debugPrint('Error loading active spreadsheet id: $e');
+      debugPrint('Error loading active common sheet id: $e');
       return null;
     }
   }
 
-  Future<void> setActiveSpreadsheetId(String spreadsheetId) async {
+  Future<void> setActiveCommonSheetId(String spreadsheetId) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_activeSpreadsheetIdKey, spreadsheetId.trim());
+      final t = spreadsheetId.trim();
+      await prefs.setString(_activeCommonSheetIdKey, t);
+      await prefs.setString(_activeSpreadsheetIdKey, t);
     } catch (e) {
-      debugPrint('Error saving active spreadsheet id: $e');
+      debugPrint('Error saving active common sheet id: $e');
       rethrow;
     }
   }
 
-  Future<void> clearActiveSpreadsheetId() async {
+  Future<void> clearActiveCommonSheetId() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_activeCommonSheetIdKey);
       await prefs.remove(_activeSpreadsheetIdKey);
     } catch (e) {
-      debugPrint('Error clearing active spreadsheet id: $e');
+      debugPrint('Error clearing active common sheet id: $e');
     }
   }
+
+  Future<String?> getActivePersonalSheetId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = prefs.getString(_activePersonalSheetIdKey);
+      if (id == null || id.trim().isEmpty) return null;
+      return id.trim();
+    } catch (e) {
+      debugPrint('Error loading active personal sheet id: $e');
+      return null;
+    }
+  }
+
+  Future<void> setActivePersonalSheetId(String? spreadsheetId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (spreadsheetId == null || spreadsheetId.trim().isEmpty) {
+        await prefs.remove(_activePersonalSheetIdKey);
+      } else {
+        await prefs.setString(_activePersonalSheetIdKey, spreadsheetId.trim());
+      }
+    } catch (e) {
+      debugPrint('Error saving active personal sheet id: $e');
+      rethrow;
+    }
+  }
+
+  /// Highlights picker for common/home (backward compatible name).
+  Future<String?> getActiveSpreadsheetId() async => getActiveCommonSheetId();
+
+  Future<void> setActiveSpreadsheetId(String spreadsheetId) async =>
+      setActiveCommonSheetId(spreadsheetId);
+
+  Future<void> clearActiveSpreadsheetId() async => clearActiveCommonSheetId();
 
   // Save default paid by name
   static const String _defaultPaidByKey = 'default_paid_by_name';

@@ -1,7 +1,14 @@
+import 'package:MoneyTracker/models/spreadsheet_sheet_kind.dart';
 import 'package:MoneyTracker/services/services_module.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+
+/// Whether the picker targets home/common (10-column) or personal (10-column) sheets.
+enum SpreadsheetPickerPurpose {
+  common,
+  personal,
+}
 
 /// Returned when the user picks a registered sheet for the expense tracker.
 class SpreadsheetPickerResult {
@@ -35,9 +42,11 @@ class SpreadsheetPickerScreen extends StatefulWidget {
   const SpreadsheetPickerScreen({
     super.key,
     required this.sheetsService,
+    this.purpose = SpreadsheetPickerPurpose.common,
   });
 
   final GoogleSheetsService sheetsService;
+  final SpreadsheetPickerPurpose purpose;
 
   @override
   State<SpreadsheetPickerScreen> createState() =>
@@ -71,7 +80,11 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
 
     try {
       final userEmail = FirebaseAuth.instance.currentUser?.email?.trim();
-      _activeId = await _storage.getActiveSpreadsheetId();
+      final isPersonalPicker =
+          widget.purpose == SpreadsheetPickerPurpose.personal;
+      _activeId = isPersonalPicker
+          ? await _storage.getActivePersonalSheetId()
+          : await _storage.getActiveCommonSheetId();
 
       final ownedRemote = userEmail != null && userEmail.isNotEmpty
           ? await _fb.getOwnedSpreadsheetsRemote(userEmail)
@@ -82,25 +95,41 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
       final driveFiles = await _driveList.listSpreadsheets(ownedByMeOnly: false);
       final byId = {for (final d in driveFiles) d.id: d};
 
-      final compat = <String, bool>{};
+      final compatCommon = <String, bool>{};
+      final compatPersonal = <String, bool>{};
       for (final d in driveFiles) {
         try {
-          compat[d.id] =
+          compatCommon[d.id] =
               await widget.sheetsService.isCompatibleExpenseSheet(d.id);
         } catch (_) {
-          compat[d.id] = false;
+          compatCommon[d.id] = false;
+        }
+        try {
+          compatPersonal[d.id] =
+              await widget.sheetsService.isCompatiblePersonalExpenseSheet(d.id);
+        } catch (_) {
+          compatPersonal[d.id] = false;
         }
       }
 
+      bool rowMatchesPurpose(Map<String, String> row) {
+        final sk = row['sheetKind'] ?? SpreadsheetSheetKind.common.dbValue;
+        if (isPersonalPicker) return sk == SpreadsheetSheetKind.personal.dbValue;
+        return sk != SpreadsheetSheetKind.personal.dbValue;
+      }
+
+      bool driveCompat(String id) =>
+          isPersonalPicker ? (compatPersonal[id] == true) : (compatCommon[id] == true);
+
       final working = <_SheetPickItem>[];
       for (final row in ownedRemote) {
+        if (!rowMatchesPurpose(row)) continue;
         final id = row['id']!.trim();
         final name = row['name']?.trim().isNotEmpty == true
             ? row['name']!.trim()
             : 'Spreadsheet';
         final ref = byId[id];
-        final isCompat =
-            ref == null ? true : (compat[id] ?? false);
+        final isCompat = ref == null ? true : driveCompat(id);
         working.add(
           _SheetPickItem(
             id: id,
@@ -116,7 +145,7 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
       final shared = <_SheetPickItem>[];
       for (final d in driveFiles) {
         if (ownedIds.contains(d.id)) continue;
-        if (compat[d.id] != true) continue;
+        if (!driveCompat(d.id)) continue;
         if (d.ownedByMe) {
           addToApp.add(
             _SheetPickItem(
@@ -167,7 +196,11 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
   }
 
   Future<void> _selectWorking(_SheetPickItem item) async {
-    await _storage.setActiveSpreadsheetId(item.id);
+    if (widget.purpose == SpreadsheetPickerPurpose.personal) {
+      await _storage.setActivePersonalSheetId(item.id);
+    } else {
+      await _storage.setActiveCommonSheetId(item.id);
+    }
     if (!mounted) return;
     Navigator.pop(
       context,
@@ -187,10 +220,14 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
 
     setState(() => _adding.add(item.id));
     try {
+      final kind = widget.purpose == SpreadsheetPickerPurpose.personal
+          ? SpreadsheetSheetKind.personal
+          : SpreadsheetSheetKind.common;
       await _fb.registerSpreadsheetOwnership(
         ownerEmail: userEmail,
         spreadsheetId: item.id,
         displayName: item.name,
+        sheetKind: kind,
       );
       final existing = await _storage.getSpreadsheet(item.id);
       await _storage.saveSpreadsheet(
@@ -198,6 +235,7 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
           id: item.id,
           name: item.name,
           addedDate: existing?.addedDate ?? DateTime.now(),
+          sheetKind: kind.dbValue,
         ),
       );
       if (!mounted) return;
@@ -228,9 +266,12 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    final isPersonal = widget.purpose == SpreadsheetPickerPurpose.personal;
+    final title = isPersonal ? 'Personal spreadsheets' : 'Home spreadsheets';
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Google spreadsheets'),
+        title: Text(title),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -264,9 +305,14 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                         child: Text(
-                          'Only spreadsheets below that match the expense header '
-                          'on Sheet1 (or a blank first row) are listed. '
-                          'Select a sheet under Working to use it in the tracker.',
+                          isPersonal
+                              ? 'Personal sheets use 10 columns on Sheet1 (no Paid By; '
+                                  'last column = linked home sheet id). '
+                                  'Working lists sheets registered as personal. '
+                                  'Tap one to set your active personal sheet.'
+                              : 'Home sheets use 10 columns on Sheet1 (includes Paid By). '
+                                  'Working lists sheets registered as shared/home. '
+                                  'Tap one to set your active home sheet.',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),

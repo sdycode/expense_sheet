@@ -12,11 +12,14 @@ import 'package:url_launcher/url_launcher.dart';
 class ExpensesListScreen extends StatefulWidget {
   final GoogleSheetsService sheetsService;
   final String spreadsheetId;
+  /// When true, Sheet1 uses the personal layout (no Paid By; column J = linked home sheet id).
+  final bool personalLayout;
 
   const ExpensesListScreen({
     super.key,
     required this.sheetsService,
     required this.spreadsheetId,
+    this.personalLayout = false,
   });
 
   @override
@@ -82,7 +85,10 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
   Future<void> _loadExpenses() async {
     setState(() => _isLoading = true);
     try {
-      final expenses = await widget.sheetsService.getExpenses();
+      final expenses = await widget.sheetsService.getExpensesFor(
+        widget.spreadsheetId,
+        personalLayout: widget.personalLayout,
+      );
       setState(() {
         _allExpenses = expenses;
         _applyFilters();
@@ -191,9 +197,16 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
             paidBy: expense.paidBy,
             isOneTimePurchase: expense.isOneTimePurchase,
             addedByEmail: expense.addedByEmail,
+            linkedHomeSpreadsheetId: widget.personalLayout
+                ? expense.linkedHomeSpreadsheetId
+                : null,
           );
 
-          await widget.sheetsService.updateExpense(updatedExpense);
+          await widget.sheetsService.updateExpenseFor(
+            widget.spreadsheetId,
+            updatedExpense,
+            personalLayout: widget.personalLayout,
+          );
           updatedCount++;
         }
       }
@@ -270,8 +283,8 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
       }).toList();
     }
 
-    // Paid By filter
-    if (_selectedPaidBy != 'All') {
+    // Paid By filter (not used on personal layout sheets)
+    if (!widget.personalLayout && _selectedPaidBy != 'All') {
       filtered = filtered.where((e) {
         if (_selectedPaidBy == 'Not Specified') {
           return e.paidBy == null || e.paidBy!.isEmpty;
@@ -1112,59 +1125,61 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 4),
-                            PopupMenuButton<String>(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(
-                                      Icons.person,
-                                      color: Colors.black,
-                                      size: 16,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Flexible(
-                                      child: Text(
-                                        _selectedPaidBy,
-                                        style: const TextStyle(
-                                          color: Colors.black,
-                                          fontSize: 12,
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
+                            if (!widget.personalLayout) ...[
+                              const SizedBox(width: 4),
+                              PopupMenuButton<String>(
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.grey),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.person,
+                                        color: Colors.black,
+                                        size: 16,
                                       ),
-                                    ),
-                                    const Icon(
-                                      Icons.arrow_drop_down,
-                                      color: Colors.black,
-                                      size: 16,
-                                    ),
-                                  ],
+                                      const SizedBox(width: 4),
+                                      Flexible(
+                                        child: Text(
+                                          _selectedPaidBy,
+                                          style: const TextStyle(
+                                            color: Colors.black,
+                                            fontSize: 12,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      const Icon(
+                                        Icons.arrow_drop_down,
+                                        color: Colors.black,
+                                        size: 16,
+                                      ),
+                                    ],
+                                  ),
                                 ),
+                                itemBuilder: (context) {
+                                  return _getPaidByOptions().map((option) {
+                                    return PopupMenuItem<String>(
+                                      value: option,
+                                      child: Text(option),
+                                    );
+                                  }).toList();
+                                },
+                                onSelected: (value) {
+                                  setState(() {
+                                    _selectedPaidBy = value;
+                                  });
+                                  _applyFilters();
+                                },
                               ),
-                              itemBuilder: (context) {
-                                return _getPaidByOptions().map((option) {
-                                  return PopupMenuItem<String>(
-                                    value: option,
-                                    child: Text(option),
-                                  );
-                                }).toList();
-                              },
-                              onSelected: (value) {
-                                setState(() {
-                                  _selectedPaidBy = value;
-                                });
-                                _applyFilters();
-                              },
-                            ),
+                            ],
                             const SizedBox(width: 4),
                             PopupMenuButton<String>(
                               child: Container(
@@ -1491,6 +1506,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
           expense: expense,
           sheetsService: widget.sheetsService,
           spreadsheetId: widget.spreadsheetId,
+          personalLayout: widget.personalLayout,
         ),
       ),
     );
@@ -1580,7 +1596,10 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
     if (confirm == true) {
       setState(() => _isLoading = true);
       try {
-        await widget.sheetsService.deleteExpense(expense.id);
+        await widget.sheetsService.deleteExpenseFor(
+          widget.spreadsheetId,
+          expense.id,
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -1645,6 +1664,12 @@ class _ExpenseCard extends StatelessWidget {
                 _buildDetailRow('Category', expense.category!),
               if (expense.paidBy != null && expense.paidBy!.isNotEmpty)
                 _buildDetailRow('Paid By', expense.paidBy!),
+              if (expense.linkedHomeSpreadsheetId != null &&
+                  expense.linkedHomeSpreadsheetId!.isNotEmpty)
+                _buildDetailRow(
+                  'Linked home sheet',
+                  expense.linkedHomeSpreadsheetId!,
+                ),
               _buildDetailRow(
                 'Date',
                 DateFormat('MMM dd, yyyy').format(expense.expenseDate),

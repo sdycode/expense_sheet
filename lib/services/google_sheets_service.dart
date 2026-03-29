@@ -38,6 +38,20 @@ class GoogleSheetsService {
     'Added By Email',
   ];
 
+  /// Personal layout: no Paid By; column J = linked home/common spreadsheet id.
+  static const List<String> personalExpenseSheetHeaderLabels = [
+    'ID',
+    'Label',
+    'Price',
+    'Category',
+    'Note',
+    'Expense Date',
+    'Timestamp',
+    'Is One Time Purchase',
+    'Added By Email',
+    'Linked Home Sheet ID',
+  ];
+
   sheets.SheetsApi? _sheetsApi;
   String? _spreadsheetId;
   String? _currentAccessToken;
@@ -152,6 +166,27 @@ class GoogleSheetsService {
     }
   }
 
+  /// Creates an empty spreadsheet in the user's Google Drive (default `Sheet1`).
+  /// Headers are written on first expense append via [_createHeadersFor].
+  Future<String?> createBlankSpreadsheet({required String title}) async {
+    if (_sheetsApi == null) {
+      throw Exception('Sheets API not initialized');
+    }
+    try {
+      final req = sheets.Spreadsheet(
+        properties: sheets.SpreadsheetProperties(title: title),
+      );
+      final created = await _sheetsApi!.spreadsheets.create(req);
+      final id = created.spreadsheetId;
+      debugPrint('GoogleSheetsService: Created spreadsheet $id');
+      return id;
+    } catch (e, stackTrace) {
+      debugPrint('GoogleSheetsService: createBlankSpreadsheet error: $e');
+      debugPrint('GoogleSheetsService: Stack trace: $stackTrace');
+      rethrow;
+    }
+  }
+
   /// True if [Sheet1] row 1 is empty or matches [expenseSheetHeaderLabels].
   Future<bool> isCompatibleExpenseSheet(String spreadsheetId) async {
     if (_sheetsApi == null) {
@@ -187,67 +222,112 @@ class GoogleSheetsService {
     return true;
   }
 
-  Future<bool> addExpense(Expense expense) async {
-    debugPrint('ids are $_sheetsApi, $_spreadsheetId');
-    if (_sheetsApi == null || _spreadsheetId == null) {
-      throw Exception('Sheets API not initialized or Spreadsheet ID not set');
+  /// Matches 10-column personal headers, or legacy 9-column (no linked home id).
+  bool _rowMatchesPersonalHeaders(List<Object?> row) {
+    final full = personalExpenseSheetHeaderLabels;
+    if (_rowMatchesHeaderLabels(row, full)) return true;
+    if (row.length >= 9) {
+      return _rowMatchesHeaderLabels(row, full.sublist(0, 9));
+    }
+    return false;
+  }
+
+  bool _rowMatchesHeaderLabels(List<Object?> row, List<String> labels) {
+    if (row.length < labels.length) return false;
+    for (var i = 0; i < labels.length; i++) {
+      final expected = labels[i].toLowerCase();
+      final actual = row[i].toString().trim().toLowerCase();
+      if (actual != expected) return false;
+    }
+    return true;
+  }
+
+  /// True if [Sheet1] row 1 is empty or matches [personalExpenseSheetHeaderLabels].
+  Future<bool> isCompatiblePersonalExpenseSheet(String spreadsheetId) async {
+    if (_sheetsApi == null) {
+      throw Exception('Sheets API not initialized');
+    }
+    try {
+      final response = await _sheetsApi!.spreadsheets.values.get(
+        spreadsheetId,
+        'Sheet1!A1:J1',
+      );
+      final values = response.values;
+      if (values == null || values.isEmpty) return true;
+      final row = values.first;
+      if (row.every((c) => c.toString().trim().isEmpty)) return true;
+      return _rowMatchesPersonalHeaders(row);
+    } catch (e) {
+      debugPrint(
+        'GoogleSheetsService: isCompatiblePersonalExpenseSheet false for '
+        '$spreadsheetId: $e',
+      );
+      return false;
+    }
+  }
+
+  Future<bool> addExpense(Expense expense, {bool personalLayout = false}) async {
+    if (_spreadsheetId == null) {
+      throw Exception('Spreadsheet ID not set');
+    }
+    return addExpenseTo(
+      _spreadsheetId!,
+      expense,
+      personalLayout: personalLayout,
+    );
+  }
+
+  Future<bool> addExpenseTo(
+    String spreadsheetId,
+    Expense expense, {
+    required bool personalLayout,
+  }) async {
+    if (_sheetsApi == null) {
+      throw Exception('Sheets API not initialized');
     }
 
     try {
-      // Check if headers exist, if not create them
+      const headerRange = 'Sheet1!A1:J1';
       try {
-        await _sheetsApi!.spreadsheets.values.get(
-          _spreadsheetId!,
-          'Sheet1!A1:J1',
-        );
+        await _sheetsApi!.spreadsheets.values.get(spreadsheetId, headerRange);
       } catch (e) {
-        // Headers don't exist, create them
-        await _createHeaders();
+        await _createHeadersFor(spreadsheetId, personalLayout);
       }
 
-      // Get the next row
-      final nextRow = await _getNextRow();
-      
-      // Prepare the row data
-      final rowData = expense.toRow();
-      
-      // Create value range
-      final valueRange = sheets.ValueRange(
-        values: [rowData],
-      );
+      final nextRow = await _getNextRowFor(spreadsheetId);
+      final rowData =
+          personalLayout ? expense.toPersonalRow() : expense.toRow();
+      final valueRange = sheets.ValueRange(values: [rowData]);
 
-      // Append the row
       await _sheetsApi!.spreadsheets.values.append(
         valueRange,
-        _spreadsheetId!,
+        spreadsheetId,
         'Sheet1!A$nextRow',
         valueInputOption: 'USER_ENTERED',
       );
 
-      debugPrint('GoogleSheetsService: Expense added successfully to row $nextRow');
+      debugPrint(
+        'GoogleSheetsService: Expense added to $spreadsheetId row $nextRow',
+      );
       return true;
     } catch (e, stackTrace) {
       debugPrint('GoogleSheetsService: Error adding expense: $e');
       debugPrint('GoogleSheetsService: Stack trace: $stackTrace');
-      // Try to refresh auth and retry once
-      if (e.toString().contains('401') || 
+      if (e.toString().contains('401') ||
           e.toString().contains('unauthorized') ||
           e.toString().toLowerCase().contains('authentication')) {
-        debugPrint('GoogleSheetsService: Authentication error detected, attempting to refresh...');
         await refreshAuth();
         if (_sheetsApi != null) {
-          debugPrint('GoogleSheetsService: Retrying expense addition after auth refresh...');
-          // Retry the operation
-          final nextRow = await _getNextRow();
-          final rowData = expense.toRow();
+          final nextRow = await _getNextRowFor(spreadsheetId);
+          final rowData =
+              personalLayout ? expense.toPersonalRow() : expense.toRow();
           final valueRange = sheets.ValueRange(values: [rowData]);
           await _sheetsApi!.spreadsheets.values.append(
             valueRange,
-            _spreadsheetId!,
+            spreadsheetId,
             'Sheet1!A$nextRow',
             valueInputOption: 'USER_ENTERED',
           );
-          debugPrint('GoogleSheetsService: Expense added successfully after retry');
           return true;
         }
       }
@@ -256,31 +336,48 @@ class GoogleSheetsService {
   }
 
   Future<void> _createHeaders() async {
-    if (_sheetsApi == null || _spreadsheetId == null) return;
+    if (_spreadsheetId == null) return;
+    await _createHeadersFor(_spreadsheetId!, false);
+  }
 
-    final headers = [expenseSheetHeaderLabels];
+  Future<void> _createHeadersFor(
+    String spreadsheetId,
+    bool personalLayout,
+  ) async {
+    if (_sheetsApi == null) return;
+
+    final headers = [
+      personalLayout
+          ? personalExpenseSheetHeaderLabels
+          : expenseSheetHeaderLabels,
+    ];
 
     final valueRange = sheets.ValueRange(values: headers);
-    
+
     await _sheetsApi!.spreadsheets.values.update(
       valueRange,
-      _spreadsheetId!,
+      spreadsheetId,
       'Sheet1!A1',
       valueInputOption: 'USER_ENTERED',
     );
   }
 
   Future<int> _getNextRow() async {
-    if (_sheetsApi == null || _spreadsheetId == null) return 2;
+    if (_spreadsheetId == null) return 2;
+    return _getNextRowFor(_spreadsheetId!);
+  }
+
+  Future<int> _getNextRowFor(String spreadsheetId) async {
+    if (_sheetsApi == null) return 2;
 
     try {
       final response = await _sheetsApi!.spreadsheets.values.get(
-        _spreadsheetId!,
+        spreadsheetId,
         'Sheet1!A:A',
       );
 
       if (response.values == null || response.values!.isEmpty) {
-        return 2; // Headers + first data row
+        return 2;
       }
 
       return response.values!.length + 1;
@@ -291,16 +388,25 @@ class GoogleSheetsService {
     }
   }
 
-  Future<List<Expense>> getExpenses() async {
-    if (_sheetsApi == null || _spreadsheetId == null) {
+  Future<List<Expense>> getExpenses({bool personalLayout = false}) async {
+    if (_spreadsheetId == null) {
       throw Exception('Sheets API not initialized or Spreadsheet ID not set');
+    }
+    return getExpensesFor(_spreadsheetId!, personalLayout: personalLayout);
+  }
+
+  Future<List<Expense>> getExpensesFor(
+    String spreadsheetId, {
+    required bool personalLayout,
+  }) async {
+    if (_sheetsApi == null) {
+      throw Exception('Sheets API not initialized');
     }
 
     try {
-      final response = await _sheetsApi!.spreadsheets.values.get(
-        _spreadsheetId!,
-        'Sheet1!A2:J', // Skip header row; J = added-by email
-      );
+      const range = 'Sheet1!A2:J';
+      final response =
+          await _sheetsApi!.spreadsheets.values.get(spreadsheetId, range);
 
       if (response.values == null || response.values!.isEmpty) {
         return [];
@@ -308,22 +414,46 @@ class GoogleSheetsService {
 
       final expenses = <Expense>[];
       for (var row in response.values!) {
-        // Skip empty rows (deleted rows will be empty)
         if (row.isEmpty || row[0].toString().trim().isEmpty) {
           continue;
         }
-        
+
         if (row.length >= 6) {
           try {
-            final isOneTimePurchase = row.length > 8 
-                ? (row[8].toString().toUpperCase() == 'TRUE' || 
-                   row[8].toString() == '1' ||
-                   row[8].toString().toLowerCase() == 'true')
-                : false;
-            
-            final addedBy = row.length > 9 && row[9].toString().trim().isNotEmpty
-                ? row[9].toString().trim()
-                : null;
+            final bool isOne;
+            final String? addedBy;
+            final String? paidBy;
+            final String? linkedHomeId;
+
+            if (personalLayout) {
+              isOne = row.length > 7
+                  ? (row[7].toString().toUpperCase() == 'TRUE' ||
+                      row[7].toString() == '1' ||
+                      row[7].toString().toLowerCase() == 'true')
+                  : false;
+              addedBy = row.length > 8 && row[8].toString().trim().isNotEmpty
+                  ? row[8].toString().trim()
+                  : null;
+              paidBy = null;
+              linkedHomeId =
+                  row.length > 9 && row[9].toString().trim().isNotEmpty
+                      ? row[9].toString().trim()
+                      : null;
+            } else {
+              isOne = row.length > 8
+                  ? (row[8].toString().toUpperCase() == 'TRUE' ||
+                      row[8].toString() == '1' ||
+                      row[8].toString().toLowerCase() == 'true')
+                  : false;
+              addedBy = row.length > 9 && row[9].toString().trim().isNotEmpty
+                  ? row[9].toString().trim()
+                  : null;
+              paidBy = row.length > 7 && row[7].toString().isNotEmpty
+                  ? row[7].toString()
+                  : null;
+              linkedHomeId = null;
+            }
+
             final expense = Expense(
               id: row[0].toString().trim(),
               label: row[1].toString(),
@@ -331,14 +461,13 @@ class GoogleSheetsService {
               category: row[3].toString().isEmpty ? null : row[3].toString(),
               note: row[4].toString().isEmpty ? null : row[4].toString(),
               expenseDate: _parseDate(row[5].toString()),
-              timestamp: row.length > 6 
+              timestamp: row.length > 6
                   ? _parseDate(row[6].toString())
                   : DateTime.now(),
-              paidBy: row.length > 7 && row[7].toString().isNotEmpty
-                  ? row[7].toString()
-                  : null,
-              isOneTimePurchase: isOneTimePurchase,
+              paidBy: paidBy,
+              isOneTimePurchase: isOne,
               addedByEmail: addedBy,
+              linkedHomeSpreadsheetId: linkedHomeId,
             );
             expenses.add(expense);
           } catch (e) {
@@ -386,27 +515,43 @@ class GoogleSheetsService {
     }
   }
 
-  Future<bool> updateExpense(Expense expense) async {
-    if (_sheetsApi == null || _spreadsheetId == null) {
-      throw Exception('Sheets API not initialized or Spreadsheet ID not set');
+  Future<bool> updateExpense(
+    Expense expense, {
+    bool personalLayout = false,
+  }) async {
+    if (_spreadsheetId == null) {
+      throw Exception('Spreadsheet ID not set');
+    }
+    return updateExpenseFor(
+      _spreadsheetId!,
+      expense,
+      personalLayout: personalLayout,
+    );
+  }
+
+  Future<bool> updateExpenseFor(
+    String spreadsheetId,
+    Expense expense, {
+    required bool personalLayout,
+  }) async {
+    if (_sheetsApi == null) {
+      throw Exception('Sheets API not initialized');
     }
 
     try {
-      // Find the row number by searching for the unique ID in column A
       final response = await _sheetsApi!.spreadsheets.values.get(
-        _spreadsheetId!,
-        'Sheet1!A:A', // Get all IDs from column A
+        spreadsheetId,
+        'Sheet1!A:A',
       );
 
       if (response.values == null || response.values!.isEmpty) {
         throw Exception('No data found in sheet');
       }
 
-      // Find the row index (0-based) where the ID matches
       int? rowIndex;
       for (int i = 0; i < response.values!.length; i++) {
-        if (i == 0) continue; // Skip header row
-        if (response.values![i].isNotEmpty && 
+        if (i == 0) continue;
+        if (response.values![i].isNotEmpty &&
             response.values![i][0].toString() == expense.id) {
           rowIndex = i;
           break;
@@ -417,20 +562,22 @@ class GoogleSheetsService {
         throw Exception('Expense with ID ${expense.id} not found');
       }
 
-      // Row number (1-based, including header)
       final rowNumber = rowIndex + 1;
 
-      final rowData = expense.toRow();
+      final rowData =
+          personalLayout ? expense.toPersonalRow() : expense.toRow();
       final valueRange = sheets.ValueRange(values: [rowData]);
 
       await _sheetsApi!.spreadsheets.values.update(
         valueRange,
-        _spreadsheetId!,
+        spreadsheetId,
         'Sheet1!A$rowNumber',
         valueInputOption: 'USER_ENTERED',
       );
 
-      debugPrint('GoogleSheetsService: Expense updated successfully at row $rowNumber (ID: ${expense.id})');
+      debugPrint(
+        'GoogleSheetsService: Expense updated at row $rowNumber (${expense.id})',
+      );
       return true;
     } catch (e, stackTrace) {
       debugPrint('GoogleSheetsService: Error updating expense: $e');
@@ -440,26 +587,31 @@ class GoogleSheetsService {
   }
 
   Future<bool> deleteExpense(String expenseId) async {
-    if (_sheetsApi == null || _spreadsheetId == null) {
-      throw Exception('Sheets API not initialized or Spreadsheet ID not set');
+    if (_spreadsheetId == null) {
+      throw Exception('Spreadsheet ID not set');
+    }
+    return deleteExpenseFor(_spreadsheetId!, expenseId);
+  }
+
+  Future<bool> deleteExpenseFor(String spreadsheetId, String expenseId) async {
+    if (_sheetsApi == null) {
+      throw Exception('Sheets API not initialized');
     }
 
     try {
-      // Find the row number by searching for the unique ID in column A
       final response = await _sheetsApi!.spreadsheets.values.get(
-        _spreadsheetId!,
-        'Sheet1!A:A', // Get all IDs from column A
+        spreadsheetId,
+        'Sheet1!A:A',
       );
 
       if (response.values == null || response.values!.isEmpty) {
         throw Exception('No data found in sheet');
       }
 
-      // Find the row index (0-based) where the ID matches
       int? rowIndex;
       for (int i = 0; i < response.values!.length; i++) {
-        if (i == 0) continue; // Skip header row
-        if (response.values![i].isNotEmpty && 
+        if (i == 0) continue;
+        if (response.values![i].isNotEmpty &&
             response.values![i][0].toString() == expenseId) {
           rowIndex = i;
           break;
@@ -470,11 +622,9 @@ class GoogleSheetsService {
         throw Exception('Expense with ID $expenseId not found');
       }
 
-      // Row number (1-based, including header)
       final rowNumber = rowIndex + 1;
 
-      // Get sheet ID for Sheet1
-      final spreadsheet = await _sheetsApi!.spreadsheets.get(_spreadsheetId!);
+      final spreadsheet = await _sheetsApi!.spreadsheets.get(spreadsheetId);
       int? sheetId;
       
       if (spreadsheet.sheets != null && spreadsheet.sheets!.isNotEmpty) {
@@ -510,10 +660,12 @@ class GoogleSheetsService {
 
       await _sheetsApi!.spreadsheets.batchUpdate(
         batchUpdateRequest,
-        _spreadsheetId!,
+        spreadsheetId,
       );
 
-      debugPrint('GoogleSheetsService: Expense row deleted successfully at row $rowNumber (ID: $expenseId)');
+      debugPrint(
+        'GoogleSheetsService: Expense row deleted at row $rowNumber ($expenseId)',
+      );
       return true;
     } catch (e, stackTrace) {
       debugPrint('GoogleSheetsService: Error deleting expense: $e');

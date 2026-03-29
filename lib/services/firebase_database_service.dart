@@ -1,5 +1,6 @@
 import 'package:MoneyTracker/models/event.dart';
 import 'package:MoneyTracker/models/frequent_expense_item.dart';
+import 'package:MoneyTracker/models/spreadsheet_sheet_kind.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 
@@ -54,34 +55,89 @@ class FirebaseDatabaseService {
   }
 
   /// Call when the current user verifies/saves a spreadsheet they use as owner.
+  /// [sheetKind] is written only for new meta or when legacy meta has no `sheetKind`; otherwise immutable.
   Future<void> registerSpreadsheetOwnership({
     required String ownerEmail,
     required String spreadsheetId,
     required String displayName,
+    SpreadsheetSheetKind sheetKind = SpreadsheetSheetKind.common,
   }) async {
     final norm = _normalizeEmail(ownerEmail);
     if (norm.isEmpty) return;
     final now = DateTime.now().toIso8601String();
     final san = _sanitizeEmail(norm);
     try {
-      await _spreadsheetMetaRef(spreadsheetId).set({
+      final metaRef = _spreadsheetMetaRef(spreadsheetId);
+      final metaSnap = await metaRef.get();
+
+      String resolvedKind;
+      if (metaSnap.exists && metaSnap.value is Map) {
+        final m = Map<String, dynamic>.from(metaSnap.value as Map);
+        final sk = m['sheetKind']?.toString();
+        if (sk == 'personal' || sk == 'common') {
+          resolvedKind = sk!;
+        } else {
+          resolvedKind = sheetKind.dbValue;
+        }
+      } else {
+        resolvedKind = sheetKind.dbValue;
+      }
+
+      final metaPayload = <String, dynamic>{
         'name': displayName,
         'ownerEmail': norm,
         'updatedAt': now,
-      });
+        'sheetKind': resolvedKind,
+      };
+
+      if (metaSnap.exists) {
+        await metaRef.update(metaPayload);
+      } else {
+        await metaRef.set(metaPayload);
+      }
+
       await _spreadsheetMembersRef(spreadsheetId).child(san).set({
         'email': norm,
         'role': 'owner',
         'addedAt': now,
       });
-      await _userOwnedSheetsRef(norm).child(spreadsheetId).set({
+
+      final ownedRef = _userOwnedSheetsRef(norm).child(spreadsheetId);
+      final ownedSnap = await ownedRef.get();
+      final ownedPayload = <String, dynamic>{
         'name': displayName,
         'role': 'owner',
         'updatedAt': now,
-      });
+        'sheetKind': resolvedKind,
+      };
+      if (ownedSnap.exists) {
+        await ownedRef.update(ownedPayload);
+      } else {
+        await ownedRef.set(ownedPayload);
+      }
     } catch (e) {
       debugPrint('registerSpreadsheetOwnership: $e');
     }
+  }
+
+  /// True if [userEmail] is the owner of a personal sheet (only owners may write personal expenses).
+  Future<bool> userCanWritePersonalSheet(
+    String spreadsheetId,
+    String userEmail,
+  ) async {
+    final meta = await getSpreadsheetMeta(spreadsheetId);
+    final kind = SpreadsheetSheetKind.fromDb(meta['sheetKind']);
+    if (kind != SpreadsheetSheetKind.personal) return true;
+    final owner = meta['ownerEmail']?.trim().toLowerCase() ?? '';
+    return owner.isNotEmpty &&
+        owner == _normalizeEmail(userEmail);
+  }
+
+  /// Personal sheets cannot use the sharing flow (editors / Drive invites).
+  Future<bool> isSpreadsheetPersonal(String spreadsheetId) async {
+    final meta = await getSpreadsheetMeta(spreadsheetId);
+    return SpreadsheetSheetKind.fromDb(meta['sheetKind']) ==
+        SpreadsheetSheetKind.personal;
   }
 
   /// Writes Firebase registry + invitee index. Caller should also call [GoogleDriveShareService.grantEditorAccess] when possible.
@@ -96,6 +152,11 @@ class FirebaseDatabaseService {
     if (normOwner.isEmpty || normInv.isEmpty) return false;
     if (normOwner == normInv) return false;
 
+    if (await isSpreadsheetPersonal(spreadsheetId)) {
+      debugPrint('shareSpreadsheet: personal sheets cannot be shared from the app');
+      return false;
+    }
+
     final now = DateTime.now().toIso8601String();
     final sanOwner = _sanitizeEmail(normOwner);
     final sanInv = _sanitizeEmail(normInv);
@@ -108,13 +169,23 @@ class FirebaseDatabaseService {
           'name': spreadsheetName,
           'ownerEmail': normOwner,
           'updatedAt': now,
+          'sheetKind': SpreadsheetSheetKind.common.dbValue,
         });
       } else {
-        await metaRef.update({
+        final patch = <String, dynamic>{
           'name': spreadsheetName,
           'ownerEmail': normOwner,
           'updatedAt': now,
-        });
+        };
+        final m = metaSnap.value is Map
+            ? Map<String, dynamic>.from(metaSnap.value as Map)
+            : <String, dynamic>{};
+        if (m['sheetKind'] == null ||
+            (m['sheetKind'].toString() != 'personal' &&
+                m['sheetKind'].toString() != 'common')) {
+          patch['sheetKind'] = SpreadsheetSheetKind.common.dbValue;
+        }
+        await metaRef.update(patch);
       }
 
       final invRef = _spreadsheetMembersRef(spreadsheetId).child(sanInv);
@@ -149,6 +220,7 @@ class FirebaseDatabaseService {
           'name': spreadsheetName,
           'role': 'owner',
           'updatedAt': now,
+          'sheetKind': SpreadsheetSheetKind.common.dbValue,
         }),
       ]);
       return true;
@@ -158,21 +230,33 @@ class FirebaseDatabaseService {
     }
   }
 
-  /// Meta under spreadsheets/{id}/meta (name, ownerEmail, …).
+  /// Meta under spreadsheets/{id}/meta (name, ownerEmail, sheetKind, …).
   Future<Map<String, String?>> getSpreadsheetMeta(String spreadsheetId) async {
     try {
       final snap = await _spreadsheetMetaRef(spreadsheetId).get();
       if (!snap.exists || snap.value == null) {
-        return {'name': null, 'ownerEmail': null};
+        return {
+          'name': null,
+          'ownerEmail': null,
+          'sheetKind': SpreadsheetSheetKind.common.dbValue,
+        };
       }
       final m = Map<String, dynamic>.from(snap.value as Map);
+      final sk = m['sheetKind']?.toString();
       return {
         'name': m['name']?.toString(),
         'ownerEmail': m['ownerEmail']?.toString(),
+        'sheetKind': (sk == 'personal' || sk == 'common')
+            ? sk
+            : SpreadsheetSheetKind.common.dbValue,
       };
     } catch (e) {
       debugPrint('getSpreadsheetMeta: $e');
-      return {'name': null, 'ownerEmail': null};
+      return {
+        'name': null,
+        'ownerEmail': null,
+        'sheetKind': SpreadsheetSheetKind.common.dbValue,
+      };
     }
   }
 
@@ -236,9 +320,13 @@ class FirebaseDatabaseService {
       final out = <Map<String, String>>[];
       for (final e in data.entries) {
         final v = e.value as Map<dynamic, dynamic>;
+        final sk = v['sheetKind']?.toString();
         out.add({
           'id': e.key.toString(),
           'name': v['name']?.toString() ?? 'Sheet',
+          'sheetKind': (sk == 'personal' || sk == 'common')
+              ? sk!
+              : SpreadsheetSheetKind.common.dbValue,
         });
       }
       return out;
