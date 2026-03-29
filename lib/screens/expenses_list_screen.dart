@@ -190,6 +190,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
             timestamp: expense.timestamp,
             paidBy: expense.paidBy,
             isOneTimePurchase: expense.isOneTimePurchase,
+            addedByEmail: expense.addedByEmail,
           );
 
           await widget.sheetsService.updateExpense(updatedExpense);

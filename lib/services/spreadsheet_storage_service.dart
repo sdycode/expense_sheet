@@ -37,6 +37,7 @@ class SpreadsheetStorageService {
   SpreadsheetStorageService._internal();
 
   static const String _key = 'saved_spreadsheets';
+  static const String _activeSpreadsheetIdKey = 'active_spreadsheet_id';
 
   Future<List<SpreadsheetInfo>> getSavedSpreadsheets() async {
     try {
@@ -107,6 +108,38 @@ class SpreadsheetStorageService {
       return spreadsheets.firstWhere((s) => s.id == spreadsheetId);
     } catch (e) {
       return null;
+    }
+  }
+
+  /// Last spreadsheet the user chose for the expense tracker (highlights picker card).
+  Future<String?> getActiveSpreadsheetId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final id = prefs.getString(_activeSpreadsheetIdKey);
+      if (id == null || id.trim().isEmpty) return null;
+      return id.trim();
+    } catch (e) {
+      debugPrint('Error loading active spreadsheet id: $e');
+      return null;
+    }
+  }
+
+  Future<void> setActiveSpreadsheetId(String spreadsheetId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_activeSpreadsheetIdKey, spreadsheetId.trim());
+    } catch (e) {
+      debugPrint('Error saving active spreadsheet id: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> clearActiveSpreadsheetId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_activeSpreadsheetIdKey);
+    } catch (e) {
+      debugPrint('Error clearing active spreadsheet id: $e');
     }
   }
 

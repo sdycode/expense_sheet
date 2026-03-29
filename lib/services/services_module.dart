@@ -4,5 +4,7 @@
 export 'firebase_auth_service.dart';
 export 'firebase_database_service.dart';
 export 'google_sheets_service.dart';
+export 'google_drive_share_service.dart';
+export 'google_drive_spreadsheet_list_service.dart';
 export 'google_sign_in_service.dart' hide SignInResult;
 export 'spreadsheet_storage_service.dart';

@@ -1,10 +1,12 @@
-import 'package:expensesheet/models/expense.dart';
-import 'package:expensesheet/screens/Spread_sheet_Selection_Screen.dart';
-import 'package:expensesheet/services/services_module.dart';
-import 'package:expensesheet/utils/expense_categories.dart';
+import 'package:MoneyTracker/models/expense.dart';
+import 'package:MoneyTracker/screens/spreadsheet_picker_screen.dart';
+import 'package:MoneyTracker/screens/Spread_sheet_Selection_Screen.dart';
+import 'package:MoneyTracker/services/services_module.dart';
+import 'package:MoneyTracker/utils/expense_categories.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:MoneyTracker/widgets/share_spreadsheet_dialog.dart';
 
 class ExpenseTrackerPage extends StatefulWidget {
   const ExpenseTrackerPage({super.key});
@@ -19,6 +21,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
   final SpreadsheetStorageService _storageService = SpreadsheetStorageService();
   final FirebaseDatabaseService _firebaseDatabaseService =
       FirebaseDatabaseService();
+  final GoogleDriveShareService _driveShareService = GoogleDriveShareService();
 
   final _formKey = GlobalKey<FormState>();
   final _labelController = TextEditingController();
@@ -64,25 +67,28 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
   Future<void> _loadSavedSpreadsheets() async {
     try {
       final spreadsheets = await _storageService.getSavedSpreadsheets();
+      final activeId = await _storageService.getActiveSpreadsheetId();
       setState(() {
         _savedSpreadsheets = spreadsheets;
-        // Auto-fill first spreadsheet ID if available and field is empty
         if (spreadsheets.isNotEmpty) {
-          final firstSpreadsheet = spreadsheets.first;
-          // Only auto-fill if field is empty
+          SpreadsheetInfo? preferred;
+          if (activeId != null && activeId.isNotEmpty) {
+            try {
+              preferred = spreadsheets.firstWhere((s) => s.id == activeId);
+            } catch (_) {}
+          }
+          final firstSpreadsheet = preferred ?? spreadsheets.first;
           if (_spreadsheetIdController.text.trim().isEmpty) {
             _spreadsheetIdController.text = firstSpreadsheet.id;
             _selectedSpreadsheetId = firstSpreadsheet.id;
             _verifiedSpreadsheetName =
                 firstSpreadsheet.name ?? 'Unnamed Spreadsheet';
-            // Set spreadsheet ID in service and load person names
             if (_isSignedIn) {
               _sheetsService.setSpreadsheetId(firstSpreadsheet.id);
               _loadPersonNames();
               _loadExpensesToUpdate();
             }
           } else {
-            // If field has value, check if it matches a saved spreadsheet
             final currentId = _spreadsheetIdController.text.trim();
             try {
               final matching = spreadsheets.firstWhere(
@@ -90,15 +96,12 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
               );
               _selectedSpreadsheetId = matching.id;
               _verifiedSpreadsheetName = matching.name ?? 'Unnamed Spreadsheet';
-              // Set spreadsheet ID in service and load person names
               if (_isSignedIn) {
                 _sheetsService.setSpreadsheetId(currentId);
                 _loadPersonNames();
                 _loadExpensesToUpdate();
               }
-            } catch (e) {
-              // Current ID doesn't match any saved spreadsheet
-            }
+            } catch (e) {}
           }
         }
       });
@@ -476,6 +479,15 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
       );
 
       await _storageService.saveSpreadsheet(spreadsheetInfo);
+      await _storageService.setActiveSpreadsheetId(spreadsheetId);
+      if (_userEmail != null && _userEmail!.isNotEmpty) {
+        await _firebaseDatabaseService.registerSpreadsheetOwnership(
+          ownerEmail: _userEmail!,
+          spreadsheetId: spreadsheetId,
+          displayName:
+              spreadsheetName ?? spreadsheetInfo.name ?? 'Unnamed Spreadsheet',
+        );
+      }
       _loadPersonNames();
       // Update UI to show spreadsheet name
       setState(() {
@@ -526,6 +538,45 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
     }
   }
 
+  Future<void> _openSpreadsheetPicker() async {
+    if (!_isSignedIn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please sign in first')),
+      );
+      return;
+    }
+    final token = await _authService.getAccessToken();
+    if (token == null || token.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not get Google token. Sign in again.'),
+          ),
+        );
+      }
+      return;
+    }
+    await _sheetsService.initializeSheetsApiWithToken(token);
+
+    final r = await Navigator.push<SpreadsheetPickerResult>(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) =>
+            SpreadsheetPickerScreen(sheetsService: _sheetsService),
+      ),
+    );
+    if (!mounted || r == null) return;
+    await _storageService.setActiveSpreadsheetId(r.spreadsheetId);
+    setState(() {
+      _spreadsheetIdController.text = r.spreadsheetId;
+      _verifiedSpreadsheetName = r.name ?? 'Spreadsheet';
+      _selectedSpreadsheetId = r.spreadsheetId;
+    });
+    _sheetsService.setSpreadsheetId(r.spreadsheetId);
+    _loadPersonNames();
+    _loadExpensesToUpdate();
+  }
+
   Future<void> _autoSaveSpreadsheetIfNeeded(String spreadsheetId) async {
     try {
       // Check if already saved
@@ -565,6 +616,15 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
       );
 
       await _storageService.saveSpreadsheet(spreadsheetInfo);
+      await _storageService.setActiveSpreadsheetId(spreadsheetId);
+      if (_userEmail != null && _userEmail!.isNotEmpty) {
+        await _firebaseDatabaseService.registerSpreadsheetOwnership(
+          ownerEmail: _userEmail!,
+          spreadsheetId: spreadsheetId,
+          displayName:
+              spreadsheetName ?? spreadsheetInfo.name ?? 'Unnamed Spreadsheet',
+        );
+      }
 
       debugPrint('Spreadsheet auto-saved: ${spreadsheetName ?? spreadsheetId}');
 
@@ -623,6 +683,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
       expenseDate: _selectedDate,
       paidBy: _selectedPaidBy,
       isOneTimePurchase: _isOneTimePurchase,
+      addedByEmail: FirebaseAuth.instance.currentUser?.email,
     );
 
     // Clear form immediately for better UX
@@ -839,6 +900,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
         timestamp: expense.timestamp,
         paidBy: expense.paidBy,
         isOneTimePurchase: expense.isOneTimePurchase,
+        addedByEmail: expense.addedByEmail,
       );
 
       await _sheetsService.updateExpense(updatedExpense);
@@ -896,6 +958,7 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
             timestamp: expense.timestamp,
             paidBy: expense.paidBy,
             isOneTimePurchase: expense.isOneTimePurchase,
+            addedByEmail: expense.addedByEmail,
           );
 
           await _sheetsService.updateExpense(updatedExpense);
@@ -1039,7 +1102,6 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
   }
 
   Future<void> _showShareSpreadsheetDialog() async {
-    final emailController = TextEditingController();
     final spreadsheetId = _spreadsheetIdController.text.trim();
 
     if (spreadsheetId.isEmpty) {
@@ -1049,78 +1111,20 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
       return;
     }
 
-    final formKey = GlobalKey<FormState>();
+    if (_userEmail == null || _userEmail!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to share a spreadsheet.')),
+      );
+      return;
+    }
 
-    await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Share Spreadsheet'),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Enter the email format you want to share with:'),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: emailController,
-                decoration: const InputDecoration(
-                  labelText: 'Email Address',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.emailAddress,
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Please enter an email';
-                  }
-                  if (!value.trim().contains('@')) {
-                    return 'Please enter a valid email';
-                  }
-                  return null;
-                },
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              if (formKey.currentState!.validate()) {
-                final email = emailController.text.trim();
-                final success = await _firebaseDatabaseService.shareSpreadsheet(
-                  email,
-                  spreadsheetId,
-                  'Shared Spreadsheet',
-                );
-
-                if (context.mounted) {
-                  Navigator.pop(context);
-                  if (success) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Spreadsheet shared with $email!'),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  } else {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Failed to share spreadsheet.'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                  }
-                }
-              }
-            },
-            child: const Text('Share'),
-          ),
-        ],
-      ),
+    await ShareSpreadsheetDialog.show(
+      context,
+      spreadsheetId: spreadsheetId,
+      fallbackSheetName: _verifiedSpreadsheetName ?? 'Shared spreadsheet',
+      ownerEmail: _userEmail!,
+      firebaseDatabaseService: _firebaseDatabaseService,
+      driveShareService: _driveShareService,
     );
   }
 
@@ -1224,9 +1228,12 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                       const SizedBox(width: 8),
                       PopupMenuButton<String>(
                         tooltip: 'Select saved spreadsheet',
-                        onSelected: (spreadsheetId) {
+                        onSelected: (spreadsheetId) async {
                           final spreadsheet = _savedSpreadsheets.firstWhere(
                             (s) => s.id == spreadsheetId,
+                          );
+                          await _storageService.setActiveSpreadsheetId(
+                            spreadsheet.id,
                           );
                           setState(() {
                             _spreadsheetIdController.text = spreadsheet.id;
@@ -1306,6 +1313,15 @@ class _ExpenseTrackerPageState extends State<ExpenseTrackerPage> {
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: _openSpreadsheetPicker,
+                    icon: const Icon(Icons.folder_open),
+                    label: const Text('Browse Google Drive'),
+                  ),
                 ),
                 const SizedBox(height: 16),
               ],
@@ -1887,6 +1903,7 @@ class _CategoryUpdateDialogState extends State<_CategoryUpdateDialog> {
             timestamp: expense.timestamp,
             paidBy: expense.paidBy,
             isOneTimePurchase: expense.isOneTimePurchase,
+            addedByEmail: expense.addedByEmail,
           );
 
           await widget.sheetsService.updateExpense(updatedExpense);

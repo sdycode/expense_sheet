@@ -1,6 +1,6 @@
-import 'package:expensesheet/models/frequent_expense_item.dart';
-import 'package:expensesheet/services/services_module.dart';
-import 'package:expensesheet/utils/expense_categories.dart';
+import 'package:MoneyTracker/models/frequent_expense_item.dart';
+import 'package:MoneyTracker/services/services_module.dart';
+import 'package:MoneyTracker/utils/expense_categories.dart';
 import 'package:flutter/material.dart';
 
 class FrequentExpenseItemsPage extends StatefulWidget {

@@ -11,6 +11,9 @@ class FirebaseAuthService {
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: [
       'https://www.googleapis.com/auth/spreadsheets',
+      // `drive.file` only allows files created/opened via Drive picker — Sheets
+      // API access alone does not expose the file to Drive permissions APIs (404).
+      'https://www.googleapis.com/auth/drive',
     ],
   );
 

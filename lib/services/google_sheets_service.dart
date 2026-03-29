@@ -24,6 +24,20 @@ class GoogleSheetsService {
   factory GoogleSheetsService() => _instance;
   GoogleSheetsService._internal();
 
+  /// Expected first-row headers on `Sheet1` for expense data (see [_createHeaders]).
+  static const List<String> expenseSheetHeaderLabels = [
+    'ID',
+    'Label',
+    'Price',
+    'Category',
+    'Note',
+    'Expense Date',
+    'Timestamp',
+    'Paid By',
+    'Is One Time Purchase',
+    'Added By Email',
+  ];
+
   sheets.SheetsApi? _sheetsApi;
   String? _spreadsheetId;
   String? _currentAccessToken;
@@ -138,6 +152,41 @@ class GoogleSheetsService {
     }
   }
 
+  /// True if [Sheet1] row 1 is empty or matches [expenseSheetHeaderLabels].
+  Future<bool> isCompatibleExpenseSheet(String spreadsheetId) async {
+    if (_sheetsApi == null) {
+      throw Exception('Sheets API not initialized');
+    }
+    try {
+      final response = await _sheetsApi!.spreadsheets.values.get(
+        spreadsheetId,
+        'Sheet1!A1:J1',
+      );
+      final values = response.values;
+      if (values == null || values.isEmpty) return true;
+      final row = values.first;
+      if (row.every((c) => c.toString().trim().isEmpty)) return true;
+      return _rowMatchesExpenseHeaders(row);
+    } catch (e) {
+      debugPrint(
+        'GoogleSheetsService: isCompatibleExpenseSheet false for '
+        '$spreadsheetId: $e',
+      );
+      return false;
+    }
+  }
+
+  bool _rowMatchesExpenseHeaders(List<Object?> row) {
+    final n = expenseSheetHeaderLabels.length;
+    for (var i = 0; i < n; i++) {
+      final expected = expenseSheetHeaderLabels[i].toLowerCase();
+      final actual =
+          i < row.length ? row[i].toString().trim().toLowerCase() : '';
+      if (actual != expected) return false;
+    }
+    return true;
+  }
+
   Future<bool> addExpense(Expense expense) async {
     debugPrint('ids are $_sheetsApi, $_spreadsheetId');
     if (_sheetsApi == null || _spreadsheetId == null) {
@@ -149,7 +198,7 @@ class GoogleSheetsService {
       try {
         await _sheetsApi!.spreadsheets.values.get(
           _spreadsheetId!,
-          'Sheet1!A1:I1',
+          'Sheet1!A1:J1',
         );
       } catch (e) {
         // Headers don't exist, create them
@@ -209,9 +258,7 @@ class GoogleSheetsService {
   Future<void> _createHeaders() async {
     if (_sheetsApi == null || _spreadsheetId == null) return;
 
-    final headers = [
-      ['ID', 'Label', 'Price', 'Category', 'Note', 'Expense Date', 'Timestamp', 'Paid By', 'Is One Time Purchase']
-    ];
+    final headers = [expenseSheetHeaderLabels];
 
     final valueRange = sheets.ValueRange(values: headers);
     
@@ -252,7 +299,7 @@ class GoogleSheetsService {
     try {
       final response = await _sheetsApi!.spreadsheets.values.get(
         _spreadsheetId!,
-        'Sheet1!A2:I', // Skip header row
+        'Sheet1!A2:J', // Skip header row; J = added-by email
       );
 
       if (response.values == null || response.values!.isEmpty) {
@@ -274,6 +321,9 @@ class GoogleSheetsService {
                    row[8].toString().toLowerCase() == 'true')
                 : false;
             
+            final addedBy = row.length > 9 && row[9].toString().trim().isNotEmpty
+                ? row[9].toString().trim()
+                : null;
             final expense = Expense(
               id: row[0].toString().trim(),
               label: row[1].toString(),
@@ -288,6 +338,7 @@ class GoogleSheetsService {
                   ? row[7].toString()
                   : null,
               isOneTimePurchase: isOneTimePurchase,
+              addedByEmail: addedBy,
             );
             expenses.add(expense);
           } catch (e) {

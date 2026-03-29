@@ -175,6 +175,7 @@ class _EditExpenseScreenState extends State<EditExpenseScreen> {
       timestamp: widget.expense.timestamp, // Keep original timestamp
       paidBy: _selectedPaidBy,
       isOneTimePurchase: _isOneTimePurchase,
+      addedByEmail: widget.expense.addedByEmail,
     );
 
     // Save event links in Firebase (expense can belong to multiple events)

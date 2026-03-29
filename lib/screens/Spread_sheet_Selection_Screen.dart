@@ -6,6 +6,7 @@ import '../services/google_sheets_service.dart';
 import '../services/firebase_auth_service.dart';
 import '../services/firebase_database_service.dart';
 import 'expenses_list_screen.dart';
+import 'spreadsheet_picker_screen.dart';
 
 class SpreadsheetSelectionScreen extends StatefulWidget {
   final GoogleSheetsService sheetsService;
@@ -20,8 +21,10 @@ class SpreadsheetSelectionScreen extends StatefulWidget {
 class _SpreadsheetSelectionScreenState
     extends State<SpreadsheetSelectionScreen> {
   final SpreadsheetStorageService _storageService = SpreadsheetStorageService();
+  final FirebaseAuthService _authService = FirebaseAuthService();
   List<SpreadsheetInfo> _spreadsheets = [];
   bool _isLoading = true;
+  String? _activeSpreadsheetId;
 
   @override
   void initState() {
@@ -32,6 +35,7 @@ class _SpreadsheetSelectionScreenState
   Future<void> _loadSpreadsheets() async {
     setState(() => _isLoading = true);
     try {
+      final active = await _storageService.getActiveSpreadsheetId();
       final localSpreadsheets = await _storageService.getSavedSpreadsheets();
       List<SpreadsheetInfo> sharedSpreadsheetsInfo = [];
 
@@ -62,6 +66,7 @@ class _SpreadsheetSelectionScreenState
 
       setState(() {
         _spreadsheets = uniqueSheets.values.toList();
+        _activeSpreadsheetId = active;
       });
     } catch (e) {
       debugPrint('Error loading spreadsheets: $e');
@@ -185,8 +190,11 @@ class _SpreadsheetSelectionScreenState
     }
   }
 
-  void _navigateToExpenses(SpreadsheetInfo spreadsheet) {
-    Navigator.push(
+  Future<void> _navigateToExpenses(SpreadsheetInfo spreadsheet) async {
+    await _storageService.setActiveSpreadsheetId(spreadsheet.id);
+    if (!mounted) return;
+    setState(() => _activeSpreadsheetId = spreadsheet.id);
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ExpensesListScreen(
@@ -197,12 +205,50 @@ class _SpreadsheetSelectionScreenState
     );
   }
 
+  Future<void> _openDrivePicker() async {
+    final token = await _authService.getAccessToken();
+    if (token == null || token.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sign in from the expense screen, then try again.'),
+          ),
+        );
+      }
+      return;
+    }
+    await widget.sheetsService.initializeSheetsApiWithToken(token);
+
+    final r = await Navigator.push<SpreadsheetPickerResult>(
+      context,
+      MaterialPageRoute(
+        builder: (ctx) =>
+            SpreadsheetPickerScreen(sheetsService: widget.sheetsService),
+      ),
+    );
+    if (!mounted || r == null) return;
+    await _storageService.setActiveSpreadsheetId(r.spreadsheetId);
+    await _loadSpreadsheets();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Selected: ${r.name ?? r.spreadsheetId}'),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('My Spreadsheets'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.cloud_outlined),
+            onPressed: _openDrivePicker,
+            tooltip: 'Browse Google Drive',
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadSpreadsheets,
@@ -225,7 +271,8 @@ class _SpreadsheetSelectionScreenState
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Add a spreadsheet ID in the main screen',
+                    'Use Browse Google Drive (cloud icon) or add an ID on the expense screen',
+                    textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 14, color: Colors.grey[500]),
                   ),
                 ],
@@ -245,9 +292,9 @@ class _SpreadsheetSelectionScreenState
                 return _SpreadsheetCard(
                   spreadsheet: spreadsheet,
                   index: index,
+                  isActive: spreadsheet.id == _activeSpreadsheetId,
                   onTap: () => _navigateToExpenses(spreadsheet),
                   onDelete: () => {},
-                  // () => _deleteSpreadsheet(spreadsheet) : null,
                 );
               },
             ),
@@ -258,12 +305,14 @@ class _SpreadsheetSelectionScreenState
 class _SpreadsheetCard extends StatelessWidget {
   final SpreadsheetInfo spreadsheet;
   final int index;
+  final bool isActive;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
   const _SpreadsheetCard({
     required this.spreadsheet,
     required this.index,
+    this.isActive = false,
     required this.onTap,
     required this.onDelete,
   });
@@ -272,9 +321,17 @@ class _SpreadsheetCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final displayName = spreadsheet.name ?? 'Spreadsheet ${index + 1}';
     final dateAdded = DateFormat('MMM dd, yyyy').format(spreadsheet.addedDate);
+    final theme = Theme.of(context);
 
     return Card(
-      elevation: 2,
+      elevation: isActive ? 4 : 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: isActive ? theme.colorScheme.primary : Colors.transparent,
+          width: isActive ? 2 : 0,
+        ),
+      ),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
@@ -290,9 +347,15 @@ class _SpreadsheetCard extends StatelessWidget {
                     child: Icon(
                       Icons.table_chart,
                       size: 32,
-                      color: Theme.of(context).colorScheme.primary,
+                      color: theme.colorScheme.primary,
                     ),
                   ),
+                  if (isActive)
+                    Icon(
+                      Icons.check_circle,
+                      color: theme.colorScheme.primary,
+                      size: 22,
+                    ),
                   if (false)
                     IconButton(
                       icon: const Icon(Icons.delete_outline, size: 20),

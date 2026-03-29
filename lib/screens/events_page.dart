@@ -1,5 +1,5 @@
-import 'package:expensesheet/models/event.dart';
-import 'package:expensesheet/services/services_module.dart';
+import 'package:MoneyTracker/models/event.dart';
+import 'package:MoneyTracker/services/services_module.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 

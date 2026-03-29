@@ -10,6 +10,8 @@ class Expense {
   final DateTime timestamp;
   final String? paidBy;
   final bool isOneTimePurchase;
+  /// Email of user who added the row (sheet column J).
+  final String? addedByEmail;
 
   Expense({
     String? id,
@@ -21,6 +23,7 @@ class Expense {
     DateTime? timestamp,
     this.paidBy,
     this.isOneTimePurchase = false,
+    this.addedByEmail,
   }) : id = id ?? const Uuid().v4(),
        timestamp = timestamp ?? DateTime.now();
 
@@ -35,6 +38,7 @@ class Expense {
       'timestamp': timestamp.toIso8601String(),
       'paidBy': paidBy ?? '',
       'isOneTimePurchase': isOneTimePurchase,
+      'addedByEmail': addedByEmail ?? '',
     };
   }
 
@@ -49,6 +53,7 @@ class Expense {
       timestamp.toIso8601String(),
       paidBy ?? '',
       isOneTimePurchase ? 'TRUE' : 'FALSE',
+      addedByEmail?.trim() ?? '',
     ];
   }
 
@@ -70,5 +75,12 @@ class Expense {
       isOneTimePurchase = map['isOneTimePurchase'] is bool
           ? map['isOneTimePurchase'] as bool
           : (map['isOneTimePurchase']?.toString().toUpperCase() == 'TRUE' || 
-             map['isOneTimePurchase']?.toString() == '1');
+             map['isOneTimePurchase']?.toString() == '1'),
+      addedByEmail = _parseOptionalString(map['addedByEmail']);
+
+  static String? _parseOptionalString(dynamic v) {
+    if (v == null) return null;
+    final s = v.toString().trim();
+    return s.isEmpty ? null : s;
+  }
 }
