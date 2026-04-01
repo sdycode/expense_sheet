@@ -2,6 +2,7 @@ import 'package:MoneyTracker/models/expense.dart';
 import 'package:MoneyTracker/models/frequent_expense_item.dart';
 import 'package:MoneyTracker/models/spreadsheet_sheet_kind.dart';
 import 'package:MoneyTracker/screens/events_page.dart';
+import 'package:MoneyTracker/screens/app_settings_screen.dart';
 import 'package:MoneyTracker/screens/expense_sheet_settings_screen.dart';
 import 'package:MoneyTracker/screens/frequent_expense_items_page.dart';
 import 'package:MoneyTracker/screens/Spread_sheet_Selection_Screen.dart';
@@ -48,9 +49,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   String? _userEmail;
   String? _verifiedCommonName;
   String? _verifiedPersonalName;
-  bool _showHomePersonalToggle = true;
-  bool _includeHomeSheet = true;
-  bool _defaultIncludeHomeWhenHidden = true;
+  ExpensePrimarySheet _primarySheet = ExpensePrimarySheet.shared;
+  ExpenseSheetsUpdateMode _updateMode = ExpenseSheetsUpdateMode.both;
+  bool _includeSecondarySheet = true;
   List<SpreadsheetInfo> _savedSpreadsheets = [];
   List<String> _personNames = [];
   bool _isLoadingPersonNames = false;
@@ -63,20 +64,49 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   bool _labelCountMapLoadTriggered = false;
   TextEditingController? _autocompleteLabelController;
 
-  bool get _effectiveIncludeHome =>
-      _showHomePersonalToggle ? _includeHomeSheet : _defaultIncludeHomeWhenHidden;
+  /// Which sheets receive the next submit (from primary, mode, and secondary checkbox).
+  ({bool writesShared, bool writesPersonal}) _writesForSubmit() {
+    if (_updateMode == ExpenseSheetsUpdateMode.single) {
+      if (_primarySheet == ExpensePrimarySheet.shared) {
+        return (writesShared: true, writesPersonal: false);
+      }
+      return (writesShared: false, writesPersonal: true);
+    }
+    if (!_includeSecondarySheet) {
+      if (_primarySheet == ExpensePrimarySheet.shared) {
+        return (writesShared: true, writesPersonal: false);
+      }
+      return (writesShared: false, writesPersonal: true);
+    }
+    return (writesShared: true, writesPersonal: true);
+  }
+
+  bool get _writesSharedThisSubmit => _writesForSubmit().writesShared;
 
   Future<void> _loadExpenseUiSettings() async {
-    final show =
-        await ExpenseSettingsStorage.instance.getShowHomePersonalToggle();
-    final def = await ExpenseSettingsStorage.instance
-        .getDefaultIncludeHomeWhenHidden();
+    final email = _userEmail ?? _authService.userEmail;
+    final primary =
+        await ExpenseSettingsStorage.instance.getPrimarySheet(email);
+    final mode = await ExpenseSettingsStorage.instance.getUpdateMode(email);
+    final secDefault = await ExpenseSettingsStorage.instance
+        .getSecondaryCheckboxDefaultChecked(email);
     if (!mounted) return;
     setState(() {
-      _showHomePersonalToggle = show;
-      _defaultIncludeHomeWhenHidden = def;
-      if (!show) _includeHomeSheet = def;
+      _primarySheet = primary;
+      _updateMode = mode;
+      if (mode == ExpenseSheetsUpdateMode.both) {
+        _includeSecondarySheet = secDefault;
+      }
     });
+  }
+
+  String _trackerStatusTitle() {
+    final p =
+        _primarySheet == ExpensePrimarySheet.shared ? 'Shared' : 'Personal';
+    final m = _updateMode == ExpenseSheetsUpdateMode.both
+        ? 'Both sheets'
+        : 'Single sheet';
+    return 'Primary: $p · $m';
   }
 
   List<SpreadsheetInfo> get _savedCommonSheets => _savedSpreadsheets
@@ -101,6 +131,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
           _userEmail = user?.email;
         });
         if (user != null) {
+          _loadExpenseUiSettings();
           _initializeSheetsApi();
         }
       }
@@ -195,6 +226,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
         _isSignedIn = true;
         _userEmail = user.email;
       });
+      await _loadExpenseUiSettings();
       await _initializeSheetsApi();
       _loadSpreadsheetNameIfExists();
       _loadPersonNames();
@@ -426,9 +458,10 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       } else if (result.isCancelled) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Sign in cancelled'),
-              backgroundColor: Colors.grey,
+            SnackBar(
+              content: const Text('Sign in cancelled'),
+              backgroundColor:
+                  Theme.of(context).colorScheme.surfaceContainerHighest,
             ),
           );
         }
@@ -607,14 +640,14 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                'Home / shared (10 columns)',
+                'Shared (10 columns)',
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
               TextFormField(
                 controller: _commonSpreadsheetIdController,
                 decoration: InputDecoration(
-                  labelText: 'Home spreadsheet ID',
+                  labelText: 'Shared spreadsheet ID',
                   border: const OutlineInputBorder(),
                   prefixIcon: const Icon(Icons.groups),
                   contentPadding: const EdgeInsets.all(2),
@@ -653,7 +686,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: PopupMenuButton<String>(
-                    tooltip: 'Saved home sheets',
+                    tooltip: 'Saved shared sheets',
                     onSelected: (spreadsheetId) async {
                       final spreadsheet = _savedCommonSheets.firstWhere(
                         (s) => s.id == spreadsheetId,
@@ -689,7 +722,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text('Saved home', style: TextStyle(fontSize: 13)),
+                          Text('Saved shared', style: TextStyle(fontSize: 13)),
                           Icon(Icons.arrow_drop_down),
                         ],
                       ),
@@ -804,7 +837,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
           content: Text(
             forPersonal
                 ? 'Please enter personal spreadsheet ID'
-                : 'Please enter home spreadsheet ID',
+                : 'Please enter shared spreadsheet ID',
           ),
           backgroundColor: Colors.orange,
         ),
@@ -858,7 +891,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
               content: Text(
                 forPersonal
                     ? 'Sheet1 headers must match the personal format (10 columns).'
-                    : 'Sheet1 headers must match the home (10-column) format.',
+                    : 'Sheet1 headers must match the shared (10-column) format.',
               ),
               backgroundColor: Colors.red,
               duration: const Duration(seconds: 5),
@@ -1033,34 +1066,25 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
     final commonId = _commonSpreadsheetIdController.text.trim();
     final personalId = _personalSpreadsheetIdController.text.trim();
-    final includeHome = _effectiveIncludeHome;
+    final w = _writesForSubmit();
+    final writesShared = w.writesShared;
+    final writesPersonal = w.writesPersonal;
 
-    if (includeHome) {
-      if (commonId.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Set a home (shared) spreadsheet ID.'),
-          ),
-        );
-        return;
-      }
-      if (personalId.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Set a personal spreadsheet ID to save to both sheets.',
-            ),
-          ),
-        );
-        return;
-      }
-    } else {
-      if (personalId.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Set a personal spreadsheet ID.')),
-        );
-        return;
-      }
+    if (writesShared && commonId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Set a shared spreadsheet ID.'),
+        ),
+      );
+      return;
+    }
+    if (writesPersonal && personalId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Set a personal spreadsheet ID.'),
+        ),
+      );
+      return;
     }
 
     final userEmail = _userEmail?.trim() ?? '';
@@ -1071,25 +1095,30 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       return;
     }
 
-    final canPersonal = await _firebaseDatabaseService.userCanWritePersonalSheet(
-      personalId,
-      userEmail,
-    );
-    if (!canPersonal) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'You can only write to a personal sheet you own.',
+    if (writesPersonal) {
+      final canPersonal =
+          await _firebaseDatabaseService.userCanWritePersonalSheet(
+        personalId,
+        userEmail,
+      );
+      if (!canPersonal) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'You can only write to a personal sheet you own.',
+              ),
+              backgroundColor: Colors.red,
             ),
-            backgroundColor: Colors.red,
-          ),
-        );
+          );
+        }
+        return;
       }
-      return;
     }
 
-    _sheetsService.setSpreadsheetId(includeHome ? commonId : personalId);
+    final primarySpreadsheetId =
+        _primarySheet == ExpensePrimarySheet.shared ? commonId : personalId;
+    _sheetsService.setSpreadsheetId(primarySpreadsheetId);
 
     final expenseId = const Uuid().v4();
     final expense = Expense(
@@ -1101,7 +1130,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
           ? null
           : _noteController.text.trim(),
       expenseDate: _selectedDate,
-      paidBy: includeHome ? _selectedPaidBy : null,
+      paidBy: writesShared ? _selectedPaidBy : null,
       isOneTimePurchase: _isOneTimePurchase,
       addedByEmail: FirebaseAuth.instance.currentUser?.email,
       linkedHomeSpreadsheetId:
@@ -1132,7 +1161,8 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       expense,
       commonId: commonId,
       personalId: personalId,
-      includeHome: includeHome,
+      writeShared: writesShared,
+      writePersonal: writesPersonal,
     );
   }
 
@@ -1140,46 +1170,84 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     Expense expense, {
     required String commonId,
     required String personalId,
-    required bool includeHome,
+    required bool writeShared,
+    required bool writePersonal,
   }) async {
-    try {
-      if (includeHome) {
-        var commonOk = false;
-        var personalOk = false;
-        try {
-          commonOk = await _sheetsService.addExpenseTo(
-            commonId,
-            expense,
-            personalLayout: false,
-          );
-        } catch (e, st) {
-          debugPrint('add common: $e\n$st');
-        }
-        try {
-          personalOk = await _sheetsService.addExpenseTo(
-            personalId,
-            expense,
-            personalLayout: true,
-          );
-        } catch (e, st) {
-          debugPrint('add personal: $e\n$st');
-        }
+    assert(writeShared || writePersonal);
+    final primaryShared = _primarySheet == ExpensePrimarySheet.shared;
 
-        if (commonOk && personalOk) {
+    Future<bool> addCommon() async {
+      try {
+        return await _sheetsService.addExpenseTo(
+          commonId,
+          expense,
+          personalLayout: false,
+        );
+      } catch (e, st) {
+        debugPrint('add common: $e\n$st');
+        return false;
+      }
+    }
+
+    Future<bool> addPersonal() async {
+      try {
+        return await _sheetsService.addExpenseTo(
+          personalId,
+          expense,
+          personalLayout: true,
+        );
+      } catch (e, st) {
+        debugPrint('add personal: $e\n$st');
+        return false;
+      }
+    }
+
+    try {
+      var commonOk = !writeShared;
+      var personalOk = !writePersonal;
+
+      if (primaryShared) {
+        if (writeShared) commonOk = await addCommon();
+        if (writePersonal) personalOk = await addPersonal();
+      } else {
+        if (writePersonal) personalOk = await addPersonal();
+        if (writeShared) commonOk = await addCommon();
+      }
+
+      final allOk =
+          (!writeShared || commonOk) && (!writePersonal || personalOk);
+
+      if (allOk) {
+        if (writeShared) {
           await _autoSaveSpreadsheetIfNeeded(commonId, personalLayout: false);
-          await _autoSaveSpreadsheetIfNeeded(personalId, personalLayout: true);
           _loadPersonNames();
           _loadExpensesToUpdate();
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Expense synced to home and personal sheets.'),
-                backgroundColor: Colors.green,
-                duration: Duration(seconds: 2),
-              ),
-            );
+        }
+        if (writePersonal) {
+          await _autoSaveSpreadsheetIfNeeded(personalId, personalLayout: true);
+        }
+        if (mounted) {
+          String msg;
+          if (writeShared && writePersonal) {
+            msg = 'Expense synced to shared and personal sheets.';
+          } else if (writeShared) {
+            msg = 'Expense synced to shared sheet.';
+          } else {
+            msg = 'Expense synced to personal sheet.';
           }
-        } else if (commonOk && !personalOk) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(msg),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (writeShared && writePersonal) {
+        if (commonOk && !personalOk) {
           await _autoSaveSpreadsheetIfNeeded(commonId, personalLayout: false);
           _loadPersonNames();
           _loadExpensesToUpdate();
@@ -1187,7 +1255,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: const Text(
-                  'Saved to home sheet only; personal sheet sync failed.',
+                  'Saved to shared sheet only; personal sheet sync failed.',
                 ),
                 backgroundColor: Colors.orange,
                 duration: const Duration(seconds: 6),
@@ -1198,7 +1266,8 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     expense,
                     commonId: commonId,
                     personalId: personalId,
-                    includeHome: true,
+                    writeShared: writeShared,
+                    writePersonal: writePersonal,
                   ),
                 ),
               ),
@@ -1210,7 +1279,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: const Text(
-                  'Saved to personal sheet only; home sheet sync failed.',
+                  'Saved to personal sheet only; shared sheet sync failed.',
                 ),
                 backgroundColor: Colors.orange,
                 duration: const Duration(seconds: 6),
@@ -1221,7 +1290,8 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     expense,
                     commonId: commonId,
                     personalId: personalId,
-                    includeHome: true,
+                    writeShared: writeShared,
+                    writePersonal: writePersonal,
                   ),
                 ),
               ),
@@ -1231,7 +1301,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text(
-                'Could not sync to either sheet. Check connection and IDs.',
+                'Could not sync to the selected sheet(s). Check connection and IDs.',
               ),
               backgroundColor: Colors.red,
               duration: const Duration(seconds: 5),
@@ -1242,79 +1312,58 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                   expense,
                   commonId: commonId,
                   personalId: personalId,
-                  includeHome: true,
+                  writeShared: writeShared,
+                  writePersonal: writePersonal,
                 ),
               ),
             ),
           );
         }
-      } else {
-        try {
-          final ok = await _sheetsService.addExpenseTo(
-            personalId,
-            expense,
-            personalLayout: true,
-          );
-          if (ok) {
-            await _autoSaveSpreadsheetIfNeeded(
-              personalId,
-              personalLayout: true,
-            );
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Expense synced to personal sheet.'),
-                  backgroundColor: Colors.green,
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            }
-          } else if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text(
-                  'Failed to sync expense. Please check connection.',
-                ),
-                backgroundColor: Colors.orange,
-                duration: const Duration(seconds: 5),
-                action: SnackBarAction(
-                  label: 'Retry',
-                  textColor: Colors.white,
-                  onPressed: () => _uploadExpenseToSheet(
-                    expense,
-                    commonId: commonId,
-                    personalId: personalId,
-                    includeHome: false,
-                  ),
-                ),
+      } else if (writeShared && !commonOk && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Failed to sync expense. Please check connection.',
+            ),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _uploadExpenseToSheet(
+                expense,
+                commonId: commonId,
+                personalId: personalId,
+                writeShared: writeShared,
+                writePersonal: writePersonal,
               ),
-            );
-          }
-        } catch (e) {
-          debugPrint('personal-only upload: $e');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Error: ${e.toString()}'),
-                backgroundColor: Colors.red,
-                duration: const Duration(seconds: 5),
-                action: SnackBarAction(
-                  label: 'Retry',
-                  textColor: Colors.white,
-                  onPressed: () => _uploadExpenseToSheet(
-                    expense,
-                    commonId: commonId,
-                    personalId: personalId,
-                    includeHome: false,
-                  ),
-                ),
+            ),
+          ),
+        );
+      } else if (writePersonal && !personalOk && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Failed to sync expense. Please check connection.',
+            ),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 5),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _uploadExpenseToSheet(
+                expense,
+                commonId: commonId,
+                personalId: personalId,
+                writeShared: writeShared,
+                writePersonal: writePersonal,
               ),
-            );
-          }
-        }
+            ),
+          ),
+        );
       }
     } catch (e, stackTrace) {
-      debugPrint('Error uploading expense: $e');
+      debugPrint('Error uploading expense: $e\n$stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -1350,9 +1399,12 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Signed in as:',
-              style: TextStyle(fontSize: 12, color: Colors.grey),
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -1593,13 +1645,13 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
       setState(() => _isLoading = true);
       try {
-        final homeId = _commonSpreadsheetIdController.text.trim();
-        if (homeId.isEmpty) {
+        final sharedId = _commonSpreadsheetIdController.text.trim();
+        if (sharedId.isEmpty) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text(
-                  'Set a home spreadsheet ID to store paid-by names.',
+                  'Set a shared spreadsheet ID to store paid-by names.',
                 ),
                 backgroundColor: Colors.orange,
               ),
@@ -1608,7 +1660,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
           return;
         }
         final success = await _firebaseDatabaseService.addPaidByPerson(
-          homeId,
+          sharedId,
           result,
         );
         if (success) {
@@ -1659,6 +1711,15 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     super.dispose();
   }
 
+  Future<void> _openAppSettings() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const AppSettingsScreen(),
+      ),
+    );
+  }
+
   Future<void> _openExpenseSheetSettings() async {
     await Navigator.push<void>(
       context,
@@ -1677,7 +1738,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     if (spreadsheetId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Set a home (shared) spreadsheet ID to use sharing.'),
+          content: Text('Set a shared spreadsheet ID to use sharing.'),
         ),
       );
       return;
@@ -1695,7 +1756,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Sharing applies to home sheets only. Switch to your home sheet ID.',
+              'Sharing applies to shared sheets only. Switch to your shared sheet ID.',
             ),
           ),
         );
@@ -1715,12 +1776,42 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final sharedPrimary = _primarySheet == ExpensePrimarySheet.shared;
+    final appBarBg = sharedPrimary
+        ? (isDark ? const Color(0xFF1E88E5) : const Color(0xFF1565C0))
+        : (isDark ? const Color(0xFF388E3C) : const Color(0xFF2E7D32));
+    const appBarFg = Colors.white;
+    final tintAlpha = isDark ? 0.14 : 0.08;
+    final tint = (sharedPrimary ? Colors.blue : Colors.green)
+        .withValues(alpha: tintAlpha);
+    final scaffoldBg =
+        Color.alphaBlend(tint, theme.colorScheme.surface);
+
     return Scaffold(
+      backgroundColor: scaffoldBg,
       appBar: AppBar(
-        title: const Text('Expense Tracker'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: Text(
+          _trackerStatusTitle(),
+          style: const TextStyle(
+            fontSize: 14.5,
+            fontWeight: FontWeight.w600,
+            color: appBarFg,
+          ),
+          maxLines: 2,
+        ),
+        backgroundColor: appBarBg,
+        foregroundColor: appBarFg,
+        iconTheme: const IconThemeData(color: appBarFg),
+        actionsIconTheme: const IconThemeData(color: appBarFg),
 
         actions: [
+          IconButton(
+            icon: const Icon(Icons.palette_outlined),
+            onPressed: _openAppSettings,
+            tooltip: 'App settings',
+          ),
           if (_isSignedIn) ...[
             IconButton(
               icon: const Icon(Icons.check_circle),
@@ -1784,6 +1875,14 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
               child: ListView(
                 padding: const EdgeInsets.only(top: 48),
                 children: [
+                  TextButton.icon(
+                    icon: const Icon(Icons.palette_outlined),
+                    label: const Text('App settings'),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _openAppSettings();
+                    },
+                  ),
                   TextButton.icon(
                     icon: const Icon(Icons.email),
                     label: const Text('Account Info'),
@@ -1892,9 +1991,12 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 // Frequent items: button + scrollable row
                 if (_frequentItems.isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  const Text(
+                  Text(
                     'Tap to fill',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   SizedBox(
@@ -2081,14 +2183,17 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey),
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
                           DateFormat('d MMM').format(_selectedDate),
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w500,
+                            color: Theme.of(context).colorScheme.onSurface,
                           ),
                         ),
                       ),
@@ -2111,23 +2216,28 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 ),
                 const SizedBox(height: 16),
 
-                if (_showHomePersonalToggle)
+                if (_updateMode == ExpenseSheetsUpdateMode.both)
                   CheckboxListTile(
-                    value: _includeHomeSheet,
+                    value: _includeSecondarySheet,
                     onChanged: (v) {
-                      setState(() => _includeHomeSheet = v ?? true);
+                      setState(() => _includeSecondarySheet = v ?? true);
                     },
-                    title: const Text('Also add to home / shared sheet'),
+                    title: Text(
+                      _primarySheet == ExpensePrimarySheet.shared
+                          ? 'Also add to personal sheet'
+                          : 'Also add to shared sheet',
+                    ),
                     subtitle: const Text(
-                      'Unchecked: personal sheet only (same expense ID when both are used).',
+                      'Same expense ID when both sheets are updated.',
                     ),
                     controlAffinity: ListTileControlAffinity.leading,
                     contentPadding: EdgeInsets.zero,
                   ),
-                if (_showHomePersonalToggle) const SizedBox(height: 8),
+                if (_updateMode == ExpenseSheetsUpdateMode.both)
+                  const SizedBox(height: 8),
 
-                // Paid By: wrap + add button (home sheet column only)
-                if (_effectiveIncludeHome)
+                // Paid By: shared sheet column only
+                if (_writesSharedThisSubmit)
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -2205,12 +2315,13 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                       onPressed: _isLoading ? null : _showAddPersonDialog,
                       tooltip: 'Add new person',
                       style: IconButton.styleFrom(
-                        backgroundColor: Colors.blue[50],
+                        backgroundColor:
+                            Theme.of(context).colorScheme.primaryContainer,
                       ),
                     ),
                   ],
                 ),
-                if (_effectiveIncludeHome) const SizedBox(height: 24),
+                if (_writesSharedThisSubmit) const SizedBox(height: 24),
 
                 // Submit Button
                 ElevatedButton(

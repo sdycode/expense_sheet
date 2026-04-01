@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
-import 'screens/startup_view.dart';
+import 'package:MoneyTracker/screens/startup_view.dart';
+import 'package:MoneyTracker/services/theme_preference_service.dart';
+import 'package:MoneyTracker/theme/app_themes.dart';
 
-void main() {
-  WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+Future<void> main() async {
+  final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
+  await ThemePreferenceService.instance.load();
   runApp(const MyApp());
 }
 
@@ -13,25 +16,19 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Expense Tracker',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
-        dropdownMenuTheme: const DropdownMenuThemeData(
-          textStyle: TextStyle(color: Colors.black),
-        ),
-        inputDecorationTheme: const InputDecorationTheme(
-          labelStyle: TextStyle(color: Colors.black87),
-        ),
-        textTheme: const TextTheme(
-          bodyLarge: TextStyle(color: Colors.black),
-          bodyMedium: TextStyle(color: Colors.black),
-          bodySmall: TextStyle(color: Colors.black),
-        ),
-      ),
-      home: const StartupView(),
+    return ListenableBuilder(
+      listenable: ThemePreferenceService.instance,
+      builder: (context, _) {
+        final svc = ThemePreferenceService.instance;
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'Expense Tracker',
+          themeMode: svc.themeMode,
+          theme: AppThemes.light(),
+          darkTheme: AppThemes.dark(),
+          home: const StartupView(),
+        );
+      },
     );
   }
 }

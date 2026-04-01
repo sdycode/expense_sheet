@@ -1,43 +1,110 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Prefs for home/personal expense UI (checkbox visibility and default).
+/// Which sheet is treated as "primary" for single-sheet updates and ordering.
+enum ExpensePrimarySheet {
+  shared,
+  personal;
+
+  static ExpensePrimarySheet fromStorage(String? v) {
+    if (v == 'personal') return ExpensePrimarySheet.personal;
+    return ExpensePrimarySheet.shared;
+  }
+
+  String get storageValue =>
+      this == ExpensePrimarySheet.personal ? 'personal' : 'shared';
+}
+
+/// Whether new expenses update one sheet or can target both.
+enum ExpenseSheetsUpdateMode {
+  single,
+  both;
+
+  static ExpenseSheetsUpdateMode fromStorage(String? v) {
+    if (v == 'single') return ExpenseSheetsUpdateMode.single;
+    return ExpenseSheetsUpdateMode.both;
+  }
+
+  String get storageValue =>
+      this == ExpenseSheetsUpdateMode.single ? 'single' : 'both';
+}
+
+/// Per-user (Gmail) prefs for how the add-expense flow writes to shared vs personal sheets.
 class ExpenseSettingsStorage {
   ExpenseSettingsStorage._();
   static final ExpenseSettingsStorage instance = ExpenseSettingsStorage._();
 
-  static const String _showHomePersonalToggleKey = 'show_home_personal_toggle';
-  static const String _defaultIncludeHomeWhenHiddenKey =
-      'default_include_home_when_hidden';
+  static const String _stemPrimary = 'expense_primary_v1_';
+  static const String _stemMode = 'expense_update_mode_v1_';
+  static const String _stemSecondaryDefault = 'expense_secondary_cb_default_v1_';
 
-  /// When true, show "Also add to home sheet" on the add-expense form.
-  Future<bool> getShowHomePersonalToggle() async {
+  static String _normalizeEmailKey(String? email) {
+    final e = email?.trim().toLowerCase() ?? '';
+    if (e.isEmpty) return 'guest';
+    return e.replaceAll('@', '_at_').replaceAll('.', '_');
+  }
+
+  String _kPrimary(String? email) => '$_stemPrimary${_normalizeEmailKey(email)}';
+  String _kMode(String? email) => '$_stemMode${_normalizeEmailKey(email)}';
+  String _kSecondaryDefault(String? email) =>
+      '$_stemSecondaryDefault${_normalizeEmailKey(email)}';
+
+  Future<ExpensePrimarySheet> getPrimarySheet(String? userEmail) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getBool(_showHomePersonalToggleKey) ?? true;
+      return ExpensePrimarySheet.fromStorage(
+        prefs.getString(_kPrimary(userEmail)),
+      );
     } catch (e) {
-      debugPrint('getShowHomePersonalToggle: $e');
+      debugPrint('getPrimarySheet: $e');
+      return ExpensePrimarySheet.shared;
+    }
+  }
+
+  Future<void> setPrimarySheet(
+    String? userEmail,
+    ExpensePrimarySheet value,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kPrimary(userEmail), value.storageValue);
+  }
+
+  Future<ExpenseSheetsUpdateMode> getUpdateMode(String? userEmail) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return ExpenseSheetsUpdateMode.fromStorage(
+        prefs.getString(_kMode(userEmail)),
+      );
+    } catch (e) {
+      debugPrint('getUpdateMode: $e');
+      return ExpenseSheetsUpdateMode.both;
+    }
+  }
+
+  Future<void> setUpdateMode(
+    String? userEmail,
+    ExpenseSheetsUpdateMode value,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kMode(userEmail), value.storageValue);
+  }
+
+  /// When [getUpdateMode] is [both], initial state of "also add to other sheet" on the form.
+  Future<bool> getSecondaryCheckboxDefaultChecked(String? userEmail) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(_kSecondaryDefault(userEmail)) ?? true;
+    } catch (e) {
+      debugPrint('getSecondaryCheckboxDefaultChecked: $e');
       return true;
     }
   }
 
-  Future<void> setShowHomePersonalToggle(bool value) async {
+  Future<void> setSecondaryCheckboxDefaultChecked(
+    String? userEmail,
+    bool value,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_showHomePersonalToggleKey, value);
-  }
-
-  /// When toggle is hidden, this is the effective "also home" value (default true).
-  Future<bool> getDefaultIncludeHomeWhenHidden() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      return prefs.getBool(_defaultIncludeHomeWhenHiddenKey) ?? true;
-    } catch (e) {
-      return true;
-    }
-  }
-
-  Future<void> setDefaultIncludeHomeWhenHidden(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_defaultIncludeHomeWhenHiddenKey, value);
+    await prefs.setBool(_kSecondaryDefault(userEmail), value);
   }
 }

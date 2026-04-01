@@ -137,6 +137,12 @@ class GoogleSheetsService {
     return _sheetsApi != null && _spreadsheetId != null;
   }
 
+  /// True when [e] is a Google API 401 (expired or invalid OAuth access token).
+  static bool isSheetsUnauthorizedError(Object e) {
+    final s = e.toString();
+    return s.contains('DetailedApiRequestError') && s.contains('401');
+  }
+
   Future<String?> getSpreadsheetName(String spreadsheetId) async {
     if (_sheetsApi == null) {
       throw Exception('Sheets API not initialized');
@@ -149,6 +155,49 @@ class GoogleSheetsService {
       debugPrint('GoogleSheetsService: Error getting spreadsheet name: $e');
       debugPrint('GoogleSheetsService: Stack trace: $stackTrace');
       return null;
+    }
+  }
+
+  /// Like [getSpreadsheetName], but on 401 runs [reauthorize] once (e.g. refresh
+  /// OAuth token + [initializeSheetsApiWithToken]) and retries the request.
+  Future<String?> getSpreadsheetNameWithReauthorize(
+    String spreadsheetId,
+    Future<void> Function() reauthorize,
+  ) async {
+    if (_sheetsApi == null) {
+      debugPrint(
+        'GoogleSheetsService: getSpreadsheetNameWithReauthorize: API not initialized',
+      );
+      return null;
+    }
+
+    Future<String?> fetch() async {
+      final spreadsheet = await _sheetsApi!.spreadsheets.get(spreadsheetId);
+      return spreadsheet.properties?.title;
+    }
+
+    try {
+      return await fetch();
+    } catch (e, stackTrace) {
+      if (!isSheetsUnauthorizedError(e)) {
+        debugPrint('GoogleSheetsService: Error getting spreadsheet name: $e');
+        debugPrint('GoogleSheetsService: Stack trace: $stackTrace');
+        return null;
+      }
+      debugPrint(
+        'GoogleSheetsService: 401 on getSpreadsheetName, refreshing token and retrying...',
+      );
+      try {
+        await reauthorize();
+        if (_sheetsApi == null) return null;
+        return await fetch();
+      } catch (e2, st2) {
+        debugPrint(
+          'GoogleSheetsService: Retry after reauthorize failed: $e2',
+        );
+        debugPrint('GoogleSheetsService: Stack trace: $st2');
+        return null;
+      }
     }
   }
 

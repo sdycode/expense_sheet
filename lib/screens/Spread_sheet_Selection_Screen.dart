@@ -53,14 +53,51 @@ class _SpreadsheetSelectionScreenState
     _loadSpreadsheets();
   }
 
+  /// Pull current document title from Google Sheets (source of truth for names).
+  Future<SpreadsheetInfo> _refreshSheetTitle(
+    SpreadsheetInfo s, {
+    required bool persistToLocalPrefs,
+  }) async {
+    try {
+      final title =
+          await widget.sheetsService.getSpreadsheetNameWithReauthorize(
+        s.id,
+        () async {
+          final token = await _authService.getAccessToken(forceRefresh: true);
+          if (token == null || token.isEmpty) {
+            throw StateError('No Google access token after refresh');
+          }
+          await widget.sheetsService.initializeSheetsApiWithToken(token);
+        },
+      );
+      if (title != null && title.trim().isNotEmpty) {
+        final trimmed = title.trim();
+        if (trimmed != (s.name ?? '')) {
+          final updated = SpreadsheetInfo(
+            id: s.id,
+            name: trimmed,
+            addedDate: s.addedDate,
+            sheetKind: s.sheetKind,
+          );
+          if (persistToLocalPrefs) {
+            await _storageService.saveSpreadsheet(updated);
+          }
+          return updated;
+        }
+      }
+    } catch (e) {
+      debugPrint('SpreadsheetSelectionScreen: title refresh ${s.id}: $e');
+    }
+    return s;
+  }
+
   Future<void> _loadSpreadsheets() async {
     setState(() => _isLoading = true);
     try {
       await _storageService.migrateLegacyActiveSheetIdIfNeeded();
       final activeCommon = await _storageService.getActiveCommonSheetId();
       final activePersonal = await _storageService.getActivePersonalSheetId();
-      final localSpreadsheets = await _storageService.getSavedSpreadsheets();
-      final localIds = localSpreadsheets.map((s) => s.id).toSet();
+      var localSpreadsheets = await _storageService.getSavedSpreadsheets();
 
       final sharedSpreadsheetsInfo = <SpreadsheetInfo>[];
       final currentUserEmail = _authService.currentUser?.email;
@@ -78,6 +115,32 @@ class _SpreadsheetSelectionScreenState
           );
         }
       }
+
+      // Names in prefs / Firebase are stale if the user renamed the file in Drive.
+      final token = await _authService.getAccessToken(forceRefresh: true);
+      if (token != null && token.isNotEmpty) {
+        try {
+          await widget.sheetsService.initializeSheetsApiWithToken(token);
+          final refreshedLocals = <SpreadsheetInfo>[];
+          for (final s in localSpreadsheets) {
+            refreshedLocals.add(
+              await _refreshSheetTitle(s, persistToLocalPrefs: true),
+            );
+          }
+          localSpreadsheets = refreshedLocals;
+
+          for (var i = 0; i < sharedSpreadsheetsInfo.length; i++) {
+            sharedSpreadsheetsInfo[i] = await _refreshSheetTitle(
+              sharedSpreadsheetsInfo[i],
+              persistToLocalPrefs: false,
+            );
+          }
+        } catch (e) {
+          debugPrint('SpreadsheetSelectionScreen: Sheets init for title refresh: $e');
+        }
+      }
+
+      final localIds = localSpreadsheets.map((s) => s.id).toSet();
 
       final sharedIds = sharedSpreadsheetsInfo.map((s) => s.id).toSet();
       _idsAlsoSharedWithMe = localIds.intersection(sharedIds);
@@ -184,7 +247,7 @@ class _SpreadsheetSelectionScreenState
           children: [
             ListTile(
               leading: const Icon(Icons.groups_outlined),
-              title: const Text('Browse home / group sheets'),
+              title: const Text('Browse shared / group sheets'),
               subtitle: const Text('10 columns · shared expenses'),
               onTap: () =>
                   Navigator.pop(ctx, SpreadsheetPickerPurpose.common),
@@ -192,7 +255,7 @@ class _SpreadsheetSelectionScreenState
             ListTile(
               leading: const Icon(Icons.person_outline),
               title: const Text('Browse personal sheets'),
-              subtitle: const Text('10 columns · owner only · links home sheet id'),
+              subtitle: const Text('10 columns · owner only · links shared sheet id'),
               onTap: () =>
                   Navigator.pop(ctx, SpreadsheetPickerPurpose.personal),
             ),
@@ -254,7 +317,7 @@ class _SpreadsheetSelectionScreenState
       await widget.sheetsService.initializeSheetsApiWithToken(token);
       final title = kind == SpreadsheetSheetKind.personal
           ? 'Personal expenses'
-          : 'Home / shared expenses';
+          : 'Shared / group expenses';
       final id = await widget.sheetsService.createBlankSpreadsheet(title: title);
       if (id == null || id.isEmpty) {
         throw Exception('No spreadsheet id returned');
@@ -382,7 +445,7 @@ class _SpreadsheetSelectionScreenState
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.add, size: 20),
-                label: const Text('New home sheet'),
+                label: const Text('New shared sheet'),
               ),
               FilledButton.tonalIcon(
                 onPressed: _creating
@@ -459,8 +522,8 @@ class _SpreadsheetSelectionScreenState
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             ListTile(
-                              leading: const Icon(Icons.home_outlined),
-                              title: const Text('New home / group sheet'),
+                              leading: const Icon(Icons.groups_outlined),
+                              title: const Text('New shared / group sheet'),
                               onTap: () {
                                 Navigator.pop(ctx);
                                 _createNewSheet(SpreadsheetSheetKind.common);
@@ -511,21 +574,21 @@ class _SpreadsheetSelectionScreenState
                   const SizedBox(height: 16),
                 ],
                 _sectionHeader(
-                  icon: Icons.home_outlined,
-                  title: 'Home / group spreadsheets',
+                  icon: Icons.groups_outlined,
+                  title: 'Shared / group spreadsheets',
                   subtitle:
                       'Shared or household expenses · 10 columns (includes Paid by)',
                 ),
                 _sheetGrid(
                   _homeSheets,
                   _SheetDisplayKind.homeGroup,
-                  emptyHint: 'None — use New home sheet or Browse Drive',
+                  emptyHint: 'None — use New shared sheet or Browse Drive',
                 ),
                 _sectionHeader(
                   icon: Icons.person_outline,
                   title: 'Personal spreadsheets',
                   subtitle:
-                      'Only you (owner) can add rows · column J = home sheet id',
+                      'Only you (owner) can add rows · column J = shared sheet id',
                 ),
                 _sheetGrid(
                   _personalSheets,
@@ -536,7 +599,7 @@ class _SpreadsheetSelectionScreenState
                   icon: Icons.group_outlined,
                   title: 'Shared with you',
                   subtitle:
-                      'Sheets others invited you to · opens as home layout',
+                      'Sheets others invited you to · opens as shared layout',
                 ),
                 _sheetGrid(
                   _sharedSheets,
@@ -571,7 +634,7 @@ class _SpreadsheetCard extends StatelessWidget {
   String get _kindLabel {
     switch (displayKind) {
       case _SheetDisplayKind.homeGroup:
-        return 'Home / group';
+        return 'Shared / group';
       case _SheetDisplayKind.personal:
         return 'Personal';
       case _SheetDisplayKind.sharedWithMe:
@@ -631,7 +694,7 @@ class _SpreadsheetCard extends StatelessWidget {
                         ? Icons.person
                         : displayKind == _SheetDisplayKind.sharedWithMe
                             ? Icons.folder_shared_outlined
-                            : Icons.home_outlined,
+                            : Icons.groups_outlined,
                     size: 28,
                     color: theme.colorScheme.primary,
                   ),

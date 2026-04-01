@@ -267,7 +267,7 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
     final theme = Theme.of(context);
 
     final isPersonal = widget.purpose == SpreadsheetPickerPurpose.personal;
-    final title = isPersonal ? 'Personal spreadsheets' : 'Home spreadsheets';
+    final title = isPersonal ? 'Personal spreadsheets' : 'Shared spreadsheets';
 
     return Scaffold(
       appBar: AppBar(
@@ -307,12 +307,12 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
                         child: Text(
                           isPersonal
                               ? 'Personal sheets use 10 columns on Sheet1 (no Paid By; '
-                                  'last column = linked home sheet id). '
+                                  'last column = linked shared sheet id). '
                                   'Working lists sheets registered as personal. '
                                   'Tap one to set your active personal sheet.'
-                              : 'Home sheets use 10 columns on Sheet1 (includes Paid By). '
-                                  'Working lists sheets registered as shared/home. '
-                                  'Tap one to set your active home sheet.',
+                              : 'Shared sheets use 10 columns on Sheet1 (includes Paid By). '
+                                  'Working lists sheets registered as shared. '
+                                  'Tap one to set your active shared sheet.',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),

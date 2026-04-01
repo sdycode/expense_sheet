@@ -25,8 +25,8 @@ android {
         applicationId = "com.example.expensesheet"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // Firebase Auth requires minSdk 23
-        minSdk = flutter.minSdkVersion
+        // Firebase Auth 23.x requires minSdk 23+ (Flutter default can be 21).
+        minSdk = maxOf(flutter.minSdkVersion, 23)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

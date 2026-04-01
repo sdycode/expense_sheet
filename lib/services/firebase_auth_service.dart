@@ -100,17 +100,30 @@ class FirebaseAuthService {
     }
   }
 
-  Future<String?> getAccessToken() async {
+  /// Returns a Google OAuth access token for Sheets/Drive APIs.
+  ///
+  /// When [forceRefresh] is true, clears the cached token first so the next
+  /// [GoogleSignInAuthentication] fetch is fresh — avoids 401s from expired tokens
+  /// when opening screens that batch-call the Sheets API (e.g. title refresh).
+  Future<String?> getAccessToken({bool forceRefresh = false}) async {
     try {
-      // Get the current user
       final user = _auth.currentUser;
       if (user == null) return null;
 
-      // Get the Google Sign-In account to retrieve access token
-      final GoogleSignInAccount? googleAccount = await _googleSignIn.signInSilently();
+      final GoogleSignInAccount? googleAccount =
+          await _googleSignIn.signInSilently();
       if (googleAccount == null) return null;
 
-      final GoogleSignInAuthentication googleAuth = await googleAccount.authentication;
+      if (forceRefresh) {
+        await googleAccount.clearAuthCache();
+      }
+
+      GoogleSignInAuthentication googleAuth =
+          await googleAccount.authentication;
+      if (googleAuth.accessToken == null) {
+        await googleAccount.clearAuthCache();
+        googleAuth = await googleAccount.authentication;
+      }
       return googleAuth.accessToken;
     } catch (e) {
       debugPrint('FirebaseAuthService: Error getting access token: $e');
