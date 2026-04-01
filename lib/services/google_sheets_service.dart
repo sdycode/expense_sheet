@@ -24,7 +24,7 @@ class GoogleSheetsService {
   factory GoogleSheetsService() => _instance;
   GoogleSheetsService._internal();
 
-  /// Expected first-row headers on `Sheet1` for expense data (see [_createHeaders]).
+  /// Expected first-row headers on `Sheet1` for expense data — shared layout (A–J).
   static const List<String> expenseSheetHeaderLabels = [
     'ID',
     'Label',
@@ -38,7 +38,8 @@ class GoogleSheetsService {
     'Added By Email',
   ];
 
-  /// Personal layout: no Paid By; column J = linked home/common spreadsheet id.
+  /// Personal layout: same A–J as shared, plus K = Linked Shared Sheet ID.
+  /// Both layouts use the same A–J columns so data is readable in either sheet.
   static const List<String> personalExpenseSheetHeaderLabels = [
     'ID',
     'Label',
@@ -47,9 +48,10 @@ class GoogleSheetsService {
     'Note',
     'Expense Date',
     'Timestamp',
+    'Paid By',
     'Is One Time Purchase',
     'Added By Email',
-    'Linked Home Sheet ID',
+    'Linked Shared Sheet ID',
   ];
 
   sheets.SheetsApi? _sheetsApi;
@@ -237,6 +239,9 @@ class GoogleSheetsService {
   }
 
   /// True if [Sheet1] row 1 is empty or matches [expenseSheetHeaderLabels].
+  /// Returns true if [Sheet1] row 1 is empty, blank, or has ≥10 non-empty
+  /// cells whose labels match [expenseSheetHeaderLabels] A–J (case-insensitive).
+  /// Column K (`Linked Shared Sheet ID`) is optional and ignored.
   Future<bool> isCompatibleExpenseSheet(String spreadsheetId) async {
     if (_sheetsApi == null) {
       throw Exception('Sheets API not initialized');
@@ -244,13 +249,13 @@ class GoogleSheetsService {
     try {
       final response = await _sheetsApi!.spreadsheets.values.get(
         spreadsheetId,
-        'Sheet1!A1:J1',
+        'Sheet1!A1:K1',
       );
       final values = response.values;
       if (values == null || values.isEmpty) return true;
       final row = values.first;
       if (row.every((c) => c.toString().trim().isEmpty)) return true;
-      return _rowMatchesExpenseHeaders(row);
+      return _rowMatchesLoose(row, expenseSheetHeaderLabels);
     } catch (e) {
       debugPrint(
         'GoogleSheetsService: isCompatibleExpenseSheet false for '
@@ -260,38 +265,23 @@ class GoogleSheetsService {
     }
   }
 
-  bool _rowMatchesExpenseHeaders(List<Object?> row) {
-    final n = expenseSheetHeaderLabels.length;
+  /// Loose match: first [labels.length] columns must be non-empty and match
+  /// (case-insensitive). Any extra columns (e.g. K = Linked Shared Sheet ID)
+  /// are accepted and ignored.
+  bool _rowMatchesLoose(List<Object?> row, List<String> labels) {
+    final n = labels.length;
+    if (row.length < n) return false;
     for (var i = 0; i < n; i++) {
-      final expected = expenseSheetHeaderLabels[i].toLowerCase();
-      final actual =
-          i < row.length ? row[i].toString().trim().toLowerCase() : '';
-      if (actual != expected) return false;
-    }
-    return true;
-  }
-
-  /// Matches 10-column personal headers, or legacy 9-column (no linked home id).
-  bool _rowMatchesPersonalHeaders(List<Object?> row) {
-    final full = personalExpenseSheetHeaderLabels;
-    if (_rowMatchesHeaderLabels(row, full)) return true;
-    if (row.length >= 9) {
-      return _rowMatchesHeaderLabels(row, full.sublist(0, 9));
-    }
-    return false;
-  }
-
-  bool _rowMatchesHeaderLabels(List<Object?> row, List<String> labels) {
-    if (row.length < labels.length) return false;
-    for (var i = 0; i < labels.length; i++) {
-      final expected = labels[i].toLowerCase();
       final actual = row[i].toString().trim().toLowerCase();
+      final expected = labels[i].toLowerCase();
       if (actual != expected) return false;
     }
     return true;
   }
 
-  /// True if [Sheet1] row 1 is empty or matches [personalExpenseSheetHeaderLabels].
+
+  /// True if [Sheet1] row 1 is empty or matches the shared 10-col layout A–J
+  /// (case-insensitive). Column K is optional and ignored.
   Future<bool> isCompatiblePersonalExpenseSheet(String spreadsheetId) async {
     if (_sheetsApi == null) {
       throw Exception('Sheets API not initialized');
@@ -299,13 +289,14 @@ class GoogleSheetsService {
     try {
       final response = await _sheetsApi!.spreadsheets.values.get(
         spreadsheetId,
-        'Sheet1!A1:J1',
+        'Sheet1!A1:K1',
       );
       final values = response.values;
       if (values == null || values.isEmpty) return true;
       final row = values.first;
       if (row.every((c) => c.toString().trim().isEmpty)) return true;
-      return _rowMatchesPersonalHeaders(row);
+      // Accept any sheet whose A–J match the shared labels (col K optional).
+      return _rowMatchesLoose(row, expenseSheetHeaderLabels);
     } catch (e) {
       debugPrint(
         'GoogleSheetsService: isCompatiblePersonalExpenseSheet false for '
@@ -336,7 +327,7 @@ class GoogleSheetsService {
     }
 
     try {
-      const headerRange = 'Sheet1!A1:J1';
+      const headerRange = 'Sheet1!A1:K1';
       try {
         await _sheetsApi!.spreadsheets.values.get(spreadsheetId, headerRange);
       } catch (e) {
@@ -395,6 +386,8 @@ class GoogleSheetsService {
   ) async {
     if (_sheetsApi == null) return;
 
+    // Personal sheets use 11 columns (A–K); shared use 10 (A–J). Both share
+    // the same A–J so expenses are readable in either sheet type.
     final headers = [
       personalLayout
           ? personalExpenseSheetHeaderLabels
@@ -410,6 +403,13 @@ class GoogleSheetsService {
       valueInputOption: 'USER_ENTERED',
     );
   }
+
+  /// Public version of [_createHeadersFor] for use outside this service
+  /// (e.g. immediately after creating a new spreadsheet).
+  Future<void> writeHeaders(
+    String spreadsheetId, {
+    required bool personalLayout,
+  }) => _createHeadersFor(spreadsheetId, personalLayout);
 
   Future<int> _getNextRow() async {
     if (_spreadsheetId == null) return 2;
@@ -453,7 +453,8 @@ class GoogleSheetsService {
     }
 
     try {
-      const range = 'Sheet1!A2:J';
+      // Read up to column K (11 cols) to capture personal Linked Shared Sheet ID.
+      const range = 'Sheet1!A2:K';
       final response =
           await _sheetsApi!.spreadsheets.values.get(spreadsheetId, range);
 
@@ -469,37 +470,33 @@ class GoogleSheetsService {
 
         if (row.length >= 6) {
           try {
-            final bool isOne;
-            final String? addedBy;
-            final String? paidBy;
+            // Unified layout (A–J same for both, K = linked shared id for personal):
+            //   H (7) = Paid By
+            //   I (8) = Is One Time Purchase
+            //   J (9) = Added By Email
+            //   K (10) = Linked Shared Sheet ID (personal only)
+            final paidBy = row.length > 7 && row[7].toString().isNotEmpty
+                ? row[7].toString()
+                : null;
+            final isOne = row.length > 8
+                ? (row[8].toString().toUpperCase() == 'TRUE' ||
+                    row[8].toString() == '1' ||
+                    row[8].toString().toLowerCase() == 'true')
+                : false;
+            final addedBy =
+                row.length > 9 && row[9].toString().trim().isNotEmpty
+                    ? row[9].toString().trim()
+                    : null;
+            // Linked sheet id is in col K for personal; fall back to legacy
+            // col J (old personal layout where linked id was at index 9).
             final String? linkedHomeId;
-
             if (personalLayout) {
-              isOne = row.length > 7
-                  ? (row[7].toString().toUpperCase() == 'TRUE' ||
-                      row[7].toString() == '1' ||
-                      row[7].toString().toLowerCase() == 'true')
-                  : false;
-              addedBy = row.length > 8 && row[8].toString().trim().isNotEmpty
-                  ? row[8].toString().trim()
-                  : null;
-              paidBy = null;
-              linkedHomeId =
-                  row.length > 9 && row[9].toString().trim().isNotEmpty
-                      ? row[9].toString().trim()
-                      : null;
+              if (row.length > 10 && row[10].toString().trim().isNotEmpty) {
+                linkedHomeId = row[10].toString().trim();
+              } else {
+                linkedHomeId = null;
+              }
             } else {
-              isOne = row.length > 8
-                  ? (row[8].toString().toUpperCase() == 'TRUE' ||
-                      row[8].toString() == '1' ||
-                      row[8].toString().toLowerCase() == 'true')
-                  : false;
-              addedBy = row.length > 9 && row[9].toString().trim().isNotEmpty
-                  ? row[9].toString().trim()
-                  : null;
-              paidBy = row.length > 7 && row[7].toString().isNotEmpty
-                  ? row[7].toString()
-                  : null;
               linkedHomeId = null;
             }
 

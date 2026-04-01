@@ -446,25 +446,26 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                               selectedMonth = month;
                             });
                           },
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: isSelected
-                                  ? Theme.of(context).colorScheme.primary
-                                  : Colors.grey[200],
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              DateFormat('MMM').format(DateTime(2000, month)),
-                              style: TextStyle(
-                                color: isSelected ? Colors.white : Colors.black,
-                                fontWeight: isSelected
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                fontSize: 12,
+                            child: Builder(builder: (ctx) {
+                              final cs = Theme.of(ctx).colorScheme;
+                              return Container(
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? cs.primary
+                                    : cs.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(4),
                               ),
-                            ),
-                          ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                DateFormat('MMM').format(DateTime(2000, month)),
+                                style: TextStyle(
+                                  color: isSelected ? cs.onPrimary : cs.onSurface,
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              );
+                            }),
                         );
                       },
                     ),
@@ -888,11 +889,11 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
           controller: _searchController,
           decoration: InputDecoration(
             hintText: 'Search by label or notes...',
-            hintStyle: const TextStyle(color: Colors.grey),
-            prefixIcon: const Icon(Icons.search, color: Colors.black),
+            hintStyle: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+            prefixIcon: Icon(Icons.search, color: Theme.of(context).colorScheme.onSurfaceVariant),
             suffixIcon: _searchQuery.isNotEmpty
                 ? IconButton(
-                    icon: const Icon(Icons.clear, color: Colors.black),
+                    icon: Icon(Icons.clear, color: Theme.of(context).colorScheme.onSurfaceVariant),
                     onPressed: () {
                       _searchController.clear();
                       _onSearchChanged('');
@@ -907,7 +908,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
               vertical: 12,
             ),
           ),
-          style: const TextStyle(color: Colors.black),
+          style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
           onChanged: _onSearchChanged,
         ),
         actions: [
@@ -934,7 +935,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
           // Filters Section
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            color: Colors.grey[100],
+            color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
             child: Column(
               children: [
                 // Category Filter - Chips (Multiple Selection)
@@ -946,7 +947,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                       FilterChip(
                         label: const Text(
                           'All',
-                          style: TextStyle(color: Colors.black, fontSize: 11),
+                          style: TextStyle(fontSize: 11),
                         ),
                         selected:
                             _selectedCategories.isEmpty && !_selectedOther,
@@ -970,10 +971,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                           child: FilterChip(
                             label: Text(
                               category,
-                              style: const TextStyle(
-                                color: Colors.black,
-                                fontSize: 11,
-                              ),
+                              style: const TextStyle(fontSize: 11),
                             ),
                             selected: _selectedCategories.contains(category),
                             onSelected: (selected) {
@@ -997,7 +995,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                       FilterChip(
                         label: const Text(
                           'Other',
-                          style: TextStyle(color: Colors.black, fontSize: 11),
+                          style: TextStyle(fontSize: 11),
                         ),
                         selected: _selectedOther,
                         onSelected: (selected) {
@@ -1024,146 +1022,80 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                           scrollDirection: Axis.horizontal,
                           children: [
                             OutlinedButton.icon(
-                              style: ButtonStyle(
-                                padding: MaterialStateProperty.all(
-                                  const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                ),
-                                foregroundColor: MaterialStateProperty.all(
-                                  Colors.black,
-                                ),
-                                minimumSize: MaterialStateProperty.all(
-                                  const Size(0, 32),
-                                ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                minimumSize: const Size(0, 32),
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
                               onPressed: _selectMonth,
-                              icon: const Icon(
-                                Icons.calendar_month,
-                                color: Colors.black,
-                                size: 16,
-                              ),
+                              icon: const Icon(Icons.calendar_month, size: 16),
                               label: Text(
                                 _selectedMonth != null
-                                    ? DateFormat(
-                                        'MMM yyyy',
-                                      ).format(_selectedMonth!)
+                                    ? DateFormat('MMM yyyy').format(_selectedMonth!)
                                     : 'Month',
-                                style: const TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 12,
-                                ),
+                                style: const TextStyle(fontSize: 12),
                               ),
                             ),
                             const SizedBox(width: 4),
                             OutlinedButton.icon(
-                              style: ButtonStyle(
-                                padding: MaterialStateProperty.all(
-                                  const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                ),
-                                foregroundColor: MaterialStateProperty.all(
-                                  Colors.black,
-                                ),
-                                minimumSize: MaterialStateProperty.all(
-                                  const Size(0, 32),
-                                ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                minimumSize: const Size(0, 32),
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
                               onPressed: _selectDate,
-                              icon: const Icon(
-                                Icons.calendar_today,
-                                color: Colors.black,
-                                size: 16,
-                              ),
+                              icon: const Icon(Icons.calendar_today, size: 16),
                               label: Text(
                                 _selectedDate != null
-                                    ? DateFormat(
-                                        'MMM dd, yyyy',
-                                      ).format(_selectedDate!)
+                                    ? DateFormat('MMM dd, yyyy').format(_selectedDate!)
                                     : 'Date',
-                                style: const TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 12,
-                                ),
+                                style: const TextStyle(fontSize: 12),
                               ),
                             ),
                             const SizedBox(width: 4),
                             OutlinedButton.icon(
-                              style: ButtonStyle(
-                                padding: MaterialStateProperty.all(
-                                  const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                ),
-                                foregroundColor: MaterialStateProperty.all(
-                                  Colors.black,
-                                ),
-                                minimumSize: MaterialStateProperty.all(
-                                  const Size(0, 32),
-                                ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                minimumSize: const Size(0, 32),
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
                               onPressed: _selectDateRange,
-                              icon: const Icon(
-                                Icons.date_range,
-                                color: Colors.black,
-                                size: 16,
-                              ),
+                              icon: const Icon(Icons.date_range, size: 16),
                               label: Text(
                                 _startDate != null || _endDate != null
                                     ? '${_startDate != null ? DateFormat('MMM dd').format(_startDate!) : 'Start'} - ${_endDate != null ? DateFormat('MMM dd').format(_endDate!) : 'End'}'
                                     : 'Date Range',
-                                style: const TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 12,
-                                ),
+                                style: const TextStyle(fontSize: 12),
                               ),
                             ),
                             if (!widget.personalLayout) ...[
                               const SizedBox(width: 4),
                               PopupMenuButton<String>(
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
+                                child: Builder(builder: (ctx) {
+                                  final cs = Theme.of(ctx).colorScheme;
+                                  return Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    border: Border.all(color: Colors.grey),
+                                    border: Border.all(color: cs.outline),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      const Icon(
-                                        Icons.person,
-                                        color: Colors.black,
-                                        size: 16,
-                                      ),
+                                      Icon(Icons.person, color: cs.onSurface, size: 16),
                                       const SizedBox(width: 4),
                                       Flexible(
                                         child: Text(
                                           _selectedPaidBy,
-                                          style: const TextStyle(
-                                            color: Colors.black,
-                                            fontSize: 12,
-                                          ),
+                                          style: TextStyle(color: cs.onSurface, fontSize: 12),
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                       ),
-                                      const Icon(
-                                        Icons.arrow_drop_down,
-                                        color: Colors.black,
-                                        size: 16,
-                                      ),
+                                      Icon(Icons.arrow_drop_down, color: cs.onSurface, size: 16),
                                     ],
                                   ),
-                                ),
+                                  );
+                                }),
                                 itemBuilder: (context) {
                                   return _getPaidByOptions().map((option) {
                                     return PopupMenuItem<String>(
@@ -1182,23 +1114,18 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                             ],
                             const SizedBox(width: 4),
                             PopupMenuButton<String>(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
+                              child: Builder(builder: (ctx) {
+                                final cs = Theme.of(ctx).colorScheme;
+                                return Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey),
+                                  border: Border.all(color: cs.outline),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    const Icon(
-                                      Icons.shopping_cart,
-                                      color: Colors.black,
-                                      size: 16,
-                                    ),
+                                    Icon(Icons.shopping_cart, color: cs.onSurface, size: 16),
                                     const SizedBox(width: 4),
                                     Flexible(
                                       child: Text(
@@ -1207,21 +1134,15 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                                             : _filterOneTimePurchase == true
                                             ? 'One-Time'
                                             : 'Recurring',
-                                        style: const TextStyle(
-                                          color: Colors.black,
-                                          fontSize: 12,
-                                        ),
+                                        style: TextStyle(color: cs.onSurface, fontSize: 12),
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
-                                    const Icon(
-                                      Icons.arrow_drop_down,
-                                      color: Colors.black,
-                                      size: 16,
-                                    ),
+                                    Icon(Icons.arrow_drop_down, color: cs.onSurface, size: 16),
                                   ],
                                 ),
-                              ),
+                                );
+                              }),
                               itemBuilder: (context) {
                                 return [
                                   const PopupMenuItem(
@@ -1253,50 +1174,37 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                             ),
                             const SizedBox(width: 4),
                             PopupMenuButton<String>(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
+                              child: Builder(builder: (ctx) {
+                                final cs = Theme.of(ctx).colorScheme;
+                                return Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
-                                  border: Border.all(color: Colors.grey),
+                                  border: Border.all(color: cs.outline),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Icon(
-                                      _sortBy == 'price'
-                                          ? Icons.attach_money
-                                          : Icons.calendar_today,
-                                      color: Colors.black,
+                                      _sortBy == 'price' ? Icons.attach_money : Icons.calendar_today,
+                                      color: cs.onSurface,
                                       size: 16,
                                     ),
                                     const SizedBox(width: 4),
                                     Flexible(
                                       child: Text(
                                         _sortBy == 'price'
-                                            ? (_sortAscending
-                                                  ? 'Price ↑'
-                                                  : 'Price ↓')
-                                            : (_sortAscending
-                                                  ? 'Date ↑'
-                                                  : 'Date ↓'),
-                                        style: const TextStyle(
-                                          color: Colors.black,
-                                          fontSize: 12,
-                                        ),
+                                            ? (_sortAscending ? 'Price ↑' : 'Price ↓')
+                                            : (_sortAscending ? 'Date ↑' : 'Date ↓'),
+                                        style: TextStyle(color: cs.onSurface, fontSize: 12),
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
-                                    const Icon(
-                                      Icons.arrow_drop_down,
-                                      color: Colors.black,
-                                      size: 16,
-                                    ),
+                                    Icon(Icons.arrow_drop_down, color: cs.onSurface, size: 16),
                                   ],
                                 ),
-                              ),
+                                );
+                              }),
                               itemBuilder: (context) {
                                 return [
                                   const PopupMenuItem(
@@ -1422,7 +1330,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                         Icon(
                           Icons.receipt_long,
                           size: 64,
-                          color: Colors.grey[400],
+                          color: Theme.of(context).colorScheme.outlineVariant,
                         ),
                         const SizedBox(height: 16),
                         Text(
@@ -1431,7 +1339,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
                               : 'No expenses match your filters',
                           style: TextStyle(
                             fontSize: 16,
-                            color: Colors.grey[600],
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                         ),
                       ],
@@ -1544,7 +1452,7 @@ class _ExpensesListScreenState extends State<ExpensesListScreen> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.grey[100],
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Column(
@@ -1685,7 +1593,7 @@ class _ExpenseCard extends StatelessWidget {
                   width: double.infinity,
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.grey[100],
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
@@ -1824,29 +1732,40 @@ class _ExpenseCard extends StatelessWidget {
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                    ),
-                    // Category below label
+                    ), const SizedBox(height: 4),
+                    Row
+                    (
+                      children: [
+                        // Category below label
                     if (expense.category != null &&
                         expense.category!.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[200],
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          expense.category!,
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.grey[700],
+                     
+                      Builder(builder: (ctx) {
+                        final cs = Theme.of(ctx).colorScheme;
+                        return Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: cs.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(4),
                           ),
-                        ),
-                      ),
+                          child: Text(
+                            expense.category!,
+                            style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
+                          ),
+                        );
+                      }),
+                     const Spacer(),
+                     Text(
+                       DateFormat('d MMM yy').format(expense.expenseDate),
+                       style: TextStyle(
+                         fontSize: 11,
+                         color: Theme.of(context).colorScheme.onSurfaceVariant,
+                       ),
+                     )
                     ],
+                      ],
+                    ),
+                   
                     // Notes - only visible when searching
                     if (isSearching &&
                         expense.note != null &&
@@ -1854,7 +1773,7 @@ class _ExpenseCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         expense.note!,
-                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.onSurfaceVariant),
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1872,7 +1791,7 @@ class _ExpenseCard extends StatelessWidget {
                       icon: Icon(
                         Icons.remove_circle_outline,
                         size: 22,
-                        color: isInEvent ? Colors.red : Colors.grey,
+                        color: isInEvent ? Theme.of(context).colorScheme.error : Theme.of(context).colorScheme.outlineVariant,
                       ),
                       onPressed: isInEvent ? onRemoveFromEvent : null,
                       padding: EdgeInsets.zero,
@@ -1897,7 +1816,7 @@ class _ExpenseCard extends StatelessWidget {
                       icon: Icon(
                         Icons.add_circle_outline,
                         size: 22,
-                        color: !isInEvent ? Colors.green : Colors.grey,
+                        color: !isInEvent ? Theme.of(context).colorScheme.primary : Theme.of(context).colorScheme.outlineVariant,
                       ),
                       onPressed: !isInEvent ? onAddToEvent : null,
                       padding: EdgeInsets.zero,

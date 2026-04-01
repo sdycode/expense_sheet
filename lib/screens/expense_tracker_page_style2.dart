@@ -124,6 +124,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     _loadSavedSpreadsheets();
     _checkSignInStatus();
 
+    // Rebuild when the user changes accent colours in App Settings.
+    ThemePreferenceService.instance.addListener(_onThemeChanged);
+
     _authService.authStateChanges.listen((User? user) {
       if (mounted) {
         setState(() {
@@ -180,27 +183,34 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
         if (_commonSpreadsheetIdController.text.trim().isEmpty &&
             defaultCommon != null) {
           _commonSpreadsheetIdController.text = defaultCommon.id;
-          _verifiedCommonName =
-              defaultCommon.name ?? 'Unnamed Spreadsheet';
+          _verifiedCommonName = defaultCommon.unavailable
+              ? '⚠ Deleted / no access: ${defaultCommon.name ?? "Unnamed"}'
+              : defaultCommon.name ?? 'Unnamed Spreadsheet';
         } else if (_commonSpreadsheetIdController.text.trim().isNotEmpty) {
           try {
             final m = spreadsheets.firstWhere(
               (s) => s.id == _commonSpreadsheetIdController.text.trim(),
             );
-            _verifiedCommonName = m.name ?? 'Unnamed Spreadsheet';
+            _verifiedCommonName = m.unavailable
+                ? '⚠ Deleted / no access: ${m.name ?? "Unnamed"}'
+                : m.name ?? 'Unnamed Spreadsheet';
           } catch (_) {}
         }
 
         if (_personalSpreadsheetIdController.text.trim().isEmpty &&
             defaultPersonal != null) {
           _personalSpreadsheetIdController.text = defaultPersonal.id;
-          _verifiedPersonalName = defaultPersonal.name;
+          _verifiedPersonalName = defaultPersonal.unavailable
+              ? '⚠ Deleted / no access: ${defaultPersonal.name ?? "Unnamed"}'
+              : defaultPersonal.name;
         } else if (_personalSpreadsheetIdController.text.trim().isNotEmpty) {
           try {
             final m = spreadsheets.firstWhere(
               (s) => s.id == _personalSpreadsheetIdController.text.trim(),
             );
-            _verifiedPersonalName = m.name;
+            _verifiedPersonalName = m.unavailable
+                ? '⚠ Deleted / no access: ${m.name ?? "Unnamed"}'
+                : m.name;
           } catch (_) {}
         }
       });
@@ -627,6 +637,8 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
         _verifiedPersonalName = r.name;
       });
     }
+    // Refresh the dropdown list to include any newly saved sheets.
+    if (mounted) await _loadSavedSpreadsheets();
   }
 
   Future<void> _showSpreadsheetDialog() async {
@@ -1095,26 +1107,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       return;
     }
 
-    if (writesPersonal) {
-      final canPersonal =
-          await _firebaseDatabaseService.userCanWritePersonalSheet(
-        personalId,
-        userEmail,
-      );
-      if (!canPersonal) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'You can only write to a personal sheet you own.',
-              ),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-        return;
-      }
-    }
+    // The Sheets API write itself returns 403 if the user has no write access —
+    // no need to guard here via Firebase meta (which may be missing for newly
+    // created sheets).
 
     final primarySpreadsheetId =
         _primarySheet == ExpensePrimarySheet.shared ? commonId : personalId;
@@ -1703,12 +1698,17 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
   @override
   void dispose() {
+    ThemePreferenceService.instance.removeListener(_onThemeChanged);
     // _autocompleteLabelController is owned by Autocomplete, do not dispose
     _priceController.dispose();
     _noteController.dispose();
     _commonSpreadsheetIdController.dispose();
     _personalSpreadsheetIdController.dispose();
     super.dispose();
+  }
+
+  void _onThemeChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _openAppSettings() async {
@@ -1779,13 +1779,13 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final sharedPrimary = _primarySheet == ExpensePrimarySheet.shared;
-    final appBarBg = sharedPrimary
-        ? (isDark ? const Color(0xFF1E88E5) : const Color(0xFF1565C0))
-        : (isDark ? const Color(0xFF388E3C) : const Color(0xFF2E7D32));
+    final colorSvc = ThemePreferenceService.instance;
+    final accentColor =
+        sharedPrimary ? colorSvc.sharedColor : colorSvc.personalColor;
+    final appBarBg = accentColor;
     const appBarFg = Colors.white;
     final tintAlpha = isDark ? 0.14 : 0.08;
-    final tint = (sharedPrimary ? Colors.blue : Colors.green)
-        .withValues(alpha: tintAlpha);
+    final tint = accentColor.withValues(alpha: tintAlpha);
     final scaffoldBg =
         Color.alphaBlend(tint, theme.colorScheme.surface);
 
@@ -2356,8 +2356,8 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                 ElevatedButton.icon(
                   onPressed: _isLoading
                       ? null
-                      : () {
-                          Navigator.push(
+                      : () async {
+                          await Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (context) => SpreadsheetSelectionScreen(
@@ -2365,6 +2365,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                               ),
                             ),
                           );
+                          // Reload saved sheets so the dropdown reflects any
+                          // sheet selected (including Drive-shared by others).
+                          if (mounted) await _loadSavedSpreadsheets();
                         },
                   icon: const Icon(Icons.table_chart),
                   label: const Text('My Spreadsheets'),

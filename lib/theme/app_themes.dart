@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
+import '../services/theme_preference_service.dart';
 
-/// Light and dark [ThemeData] sharing the same primary seed (blue) so only
-/// brightness and contrast change with user preference.
+/// Light and dark [ThemeData]. The seed color is taken from
+/// [ThemePreferenceService.sharedColor] (the app-wide primary accent) so
+/// users can personalise it while only brightness/contrast change per mode.
 class AppThemes {
   AppThemes._();
 
-  static const Color seedColor = Colors.blue;
-
-  static ThemeData light() {
+  static ThemeData light({Color? seedColor}) {
+    final seed = seedColor ??
+        ThemePreferenceService.defaultSharedColor;
     final scheme = ColorScheme.fromSeed(
-      seedColor: seedColor,
+      seedColor: seed,
       brightness: Brightness.light,
     );
     return ThemeData(
@@ -33,9 +35,11 @@ class AppThemes {
     );
   }
 
-  static ThemeData dark() {
+  static ThemeData dark({Color? seedColor}) {
+    final seed = seedColor ??
+        ThemePreferenceService.defaultSharedColor;
     final scheme = ColorScheme.fromSeed(
-      seedColor: seedColor,
+      seedColor: seed,
       brightness: Brightness.dark,
     );
     return ThemeData(

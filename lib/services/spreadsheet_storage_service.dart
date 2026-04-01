@@ -9,12 +9,25 @@ class SpreadsheetInfo {
   /// `common` | `personal` from Firebase; optional for legacy local data.
   final String? sheetKind;
 
+  /// True when a Drive cross-check found the file deleted or access revoked.
+  /// This is a runtime-only flag; it is NOT persisted to SharedPreferences.
+  final bool unavailable;
+
   SpreadsheetInfo({
     required this.id,
     this.name,
     required this.addedDate,
     this.sheetKind,
+    this.unavailable = false,
   });
+
+  SpreadsheetInfo copyWith({bool? unavailable}) => SpreadsheetInfo(
+        id: id,
+        name: name,
+        addedDate: addedDate,
+        sheetKind: sheetKind,
+        unavailable: unavailable ?? this.unavailable,
+      );
 
   Map<String, dynamic> toJson() {
     return {
@@ -22,6 +35,7 @@ class SpreadsheetInfo {
       'name': name,
       'addedDate': addedDate.toIso8601String(),
       if (sheetKind != null) 'sheetKind': sheetKind,
+      // unavailable is intentionally NOT saved — it's recalculated on each refresh.
     };
   }
 
@@ -171,6 +185,15 @@ class SpreadsheetStorageService {
       await prefs.remove(_activeSpreadsheetIdKey);
     } catch (e) {
       debugPrint('Error clearing active common sheet id: $e');
+    }
+  }
+
+  Future<void> clearActivePersonalSheetId() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_activePersonalSheetIdKey);
+    } catch (e) {
+      debugPrint('Error clearing active personal sheet id: $e');
     }
   }
 

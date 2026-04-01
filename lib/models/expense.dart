@@ -46,34 +46,38 @@ class Expense {
     };
   }
 
+  /// Shared sheet row (A–J, 10 columns).
   List<String> toRow() {
     return [
-      id,
-      label,
-      price.toStringAsFixed(0),
-      category ?? '',
-      note ?? '',
-      expenseDate.toIso8601String().split('T')[0],
-      timestamp.toIso8601String(),
-      paidBy ?? '',
-      isOneTimePurchase ? 'TRUE' : 'FALSE',
-      addedByEmail?.trim() ?? '',
+      id,                                            // A
+      label,                                         // B
+      price.toStringAsFixed(0),                      // C
+      category ?? '',                                // D
+      note ?? '',                                    // E
+      expenseDate.toIso8601String().split('T')[0],   // F
+      timestamp.toIso8601String(),                   // G
+      paidBy ?? '',                                  // H
+      isOneTimePurchase ? 'TRUE' : 'FALSE',          // I
+      addedByEmail?.trim() ?? '',                    // J
     ];
   }
 
-  /// Personal sheet layout: no Paid By; last column is linked home sheet id (A–J).
+  /// Personal sheet row (A–K, 11 columns).
+  /// Columns A–J are identical to [toRow] so both layouts are interoperable.
+  /// Column K holds the linked shared spreadsheet ID.
   List<String> toPersonalRow() {
     return [
-      id,
-      label,
-      price.toStringAsFixed(0),
-      category ?? '',
-      note ?? '',
-      expenseDate.toIso8601String().split('T')[0],
-      timestamp.toIso8601String(),
-      isOneTimePurchase ? 'TRUE' : 'FALSE',
-      addedByEmail?.trim() ?? '',
-      linkedHomeSpreadsheetId?.trim() ?? '',
+      id,                                            // A
+      label,                                         // B
+      price.toStringAsFixed(0),                      // C
+      category ?? '',                                // D
+      note ?? '',                                    // E
+      expenseDate.toIso8601String().split('T')[0],   // F
+      timestamp.toIso8601String(),                   // G
+      paidBy ?? '',                                  // H
+      isOneTimePurchase ? 'TRUE' : 'FALSE',          // I
+      addedByEmail?.trim() ?? '',                    // J
+      linkedHomeSpreadsheetId?.trim() ?? '',         // K
     ];
   }
 

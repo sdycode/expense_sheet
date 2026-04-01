@@ -24,8 +24,8 @@ class MyApp extends StatelessWidget {
           debugShowCheckedModeBanner: false,
           title: 'Expense Tracker',
           themeMode: svc.themeMode,
-          theme: AppThemes.light(),
-          darkTheme: AppThemes.dark(),
+          theme: AppThemes.light(seedColor: svc.sharedColor),
+          darkTheme: AppThemes.dark(seedColor: svc.sharedColor),
           home: const StartupView(),
         );
       },

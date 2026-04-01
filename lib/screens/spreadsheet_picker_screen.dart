@@ -1,3 +1,5 @@
+import 'dart:async' show unawaited;
+
 import 'package:MoneyTracker/models/spreadsheet_sheet_kind.dart';
 import 'package:MoneyTracker/services/services_module.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -58,7 +60,10 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
   final _storage = SpreadsheetStorageService();
   final _fb = FirebaseDatabaseService();
 
+  /// Full-screen spinner only for the very first load before cache is shown.
   bool _loading = true;
+  /// Thin progress bar while background network refresh runs.
+  bool _refreshing = false;
   String? _error;
   final List<_SheetPickItem> _working = [];
   final List<_SheetPickItem> _addToApp = [];
@@ -69,57 +74,110 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _showCachedThenRefresh();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  /// Phase 1: show locally cached data immediately, then kick off Phase 2.
+  Future<void> _showCachedThenRefresh() async {
+    try {
+      final isPersonalPicker =
+          widget.purpose == SpreadsheetPickerPurpose.personal;
+      final activeId = isPersonalPicker
+          ? await _storage.getActivePersonalSheetId()
+          : await _storage.getActiveCommonSheetId();
+      final saved = await _storage.getSavedSpreadsheets();
 
+      // Build working list from local prefs instantly.
+      final working = <_SheetPickItem>[];
+      for (final s in saved) {
+        final isPersonal =
+            s.sheetKind == SpreadsheetSheetKind.personal.dbValue;
+        if (isPersonalPicker != isPersonal) continue;
+        working.add(
+          _SheetPickItem(
+            id: s.id,
+            name: s.name ?? 'Spreadsheet',
+            ownedByMe: true,
+            compatible: true,
+          ),
+        );
+      }
+      working.sort(
+        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _activeId = activeId;
+        _working
+          ..clear()
+          ..addAll(working);
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+      return;
+    }
+
+    // Phase 2: background network refresh.
+    unawaited(_refreshFromNetwork());
+  }
+
+  /// Phase 2: fetch Firebase + Drive in parallel, check compatibility,
+  /// then update UI. Does not block Phase 1 rendering.
+  Future<void> _refreshFromNetwork() async {
+    if (!mounted) return;
+    setState(() => _refreshing = true);
     try {
       final userEmail = FirebaseAuth.instance.currentUser?.email?.trim();
       final isPersonalPicker =
           widget.purpose == SpreadsheetPickerPurpose.personal;
-      _activeId = isPersonalPicker
-          ? await _storage.getActivePersonalSheetId()
-          : await _storage.getActiveCommonSheetId();
 
-      final ownedRemote = userEmail != null && userEmail.isNotEmpty
-          ? await _fb.getOwnedSpreadsheetsRemote(userEmail)
-          : <Map<String, String>>[];
-      final ownedIds =
-          ownedRemote.map((m) => m['id']!.trim()).toSet();
+      // Run Firebase owned list and Drive list in parallel.
+      final results = await Future.wait([
+        userEmail != null && userEmail.isNotEmpty
+            ? _fb.getOwnedSpreadsheetsRemote(userEmail)
+            : Future.value(<Map<String, String>>[]),
+        _driveList.listSpreadsheets(ownedByMeOnly: false),
+      ]);
 
-      final driveFiles = await _driveList.listSpreadsheets(ownedByMeOnly: false);
+      final ownedRemote = results[0] as List<Map<String, String>>;
+      final driveFiles = results[1] as List<DriveSpreadsheetRef>;
+      final ownedIds = ownedRemote.map((m) => m['id']!.trim()).toSet();
       final byId = {for (final d in driveFiles) d.id: d};
 
-      final compatCommon = <String, bool>{};
-      final compatPersonal = <String, bool>{};
+      // Check compatibility for all drive files in parallel.
+      final compatFutures = <Future<bool>>[];
       for (final d in driveFiles) {
-        try {
-          compatCommon[d.id] =
-              await widget.sheetsService.isCompatibleExpenseSheet(d.id);
-        } catch (_) {
-          compatCommon[d.id] = false;
-        }
-        try {
-          compatPersonal[d.id] =
-              await widget.sheetsService.isCompatiblePersonalExpenseSheet(d.id);
-        } catch (_) {
-          compatPersonal[d.id] = false;
+        if (isPersonalPicker) {
+          compatFutures.add(
+            widget.sheetsService
+                .isCompatiblePersonalExpenseSheet(d.id)
+                .catchError((_) => false),
+          );
+        } else {
+          compatFutures.add(
+            widget.sheetsService
+                .isCompatibleExpenseSheet(d.id)
+                .catchError((_) => false),
+          );
         }
       }
+      final compatResults = await Future.wait(compatFutures);
+      final compat = {
+        for (var i = 0; i < driveFiles.length; i++)
+          driveFiles[i].id: compatResults[i],
+      };
 
       bool rowMatchesPurpose(Map<String, String> row) {
         final sk = row['sheetKind'] ?? SpreadsheetSheetKind.common.dbValue;
         if (isPersonalPicker) return sk == SpreadsheetSheetKind.personal.dbValue;
         return sk != SpreadsheetSheetKind.personal.dbValue;
       }
-
-      bool driveCompat(String id) =>
-          isPersonalPicker ? (compatPersonal[id] == true) : (compatCommon[id] == true);
 
       final working = <_SheetPickItem>[];
       for (final row in ownedRemote) {
@@ -129,7 +187,7 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
             ? row['name']!.trim()
             : 'Spreadsheet';
         final ref = byId[id];
-        final isCompat = ref == null ? true : driveCompat(id);
+        final isCompat = ref == null ? true : (compat[id] == true);
         working.add(
           _SheetPickItem(
             id: id,
@@ -145,7 +203,7 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
       final shared = <_SheetPickItem>[];
       for (final d in driveFiles) {
         if (ownedIds.contains(d.id)) continue;
-        if (!driveCompat(d.id)) continue;
+        if (compat[d.id] != true) continue;
         if (d.ownedByMe) {
           addToApp.add(
             _SheetPickItem(
@@ -169,9 +227,11 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
         }
       }
 
-      addToApp.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-      shared.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-      working.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      for (final list in [working, addToApp, shared]) {
+        list.sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        );
+      }
 
       if (!mounted) return;
       setState(() {
@@ -184,15 +244,18 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
         _sharedCompatible
           ..clear()
           ..addAll(shared);
-        _loading = false;
       });
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
+      debugPrint('SpreadsheetPickerScreen: background refresh: $e');
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
     }
+  }
+
+  /// Called from refresh button — shows full spinner, then two-phase load.
+  Future<void> _load() async {
+    if (mounted) setState(() => _loading = true);
+    await _showCachedThenRefresh();
   }
 
   Future<void> _selectWorking(_SheetPickItem item) async {
@@ -275,7 +338,7 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading ? null : _load,
+            onPressed: (_loading || _refreshing) ? null : _load,
             tooltip: 'Refresh',
           ),
         ],
@@ -299,7 +362,10 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
                     ),
                   ),
                 )
-              : CustomScrollView(
+              : Column(
+                  children: [
+                    if (_refreshing) const LinearProgressIndicator(minHeight: 3),
+                    Expanded(child: CustomScrollView(
                   slivers: [
                     SliverToBoxAdapter(
                       child: Padding(
@@ -347,7 +413,9 @@ class _SpreadsheetPickerScreenState extends State<SpreadsheetPickerScreen> {
                     ),
                     const SliverToBoxAdapter(child: SizedBox(height: 32)),
                   ],
-                ),
+                )),
+              ],
+            ),
     );
   }
 

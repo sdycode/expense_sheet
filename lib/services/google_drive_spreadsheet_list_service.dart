@@ -11,12 +11,25 @@ class DriveSpreadsheetRef {
     required this.name,
     this.modifiedTime,
     required this.ownedByMe,
+    this.compatible,
   });
 
   final String id;
   final String name;
   final DateTime? modifiedTime;
   final bool ownedByMe;
+
+  /// Whether row 1 of Sheet1 matches the 10-column expense layout.
+  /// Null means not yet checked.
+  final bool? compatible;
+
+  DriveSpreadsheetRef copyWith({bool? compatible}) => DriveSpreadsheetRef(
+        id: id,
+        name: name,
+        modifiedTime: modifiedTime,
+        ownedByMe: ownedByMe,
+        compatible: compatible ?? this.compatible,
+      );
 }
 
 /// Lists spreadsheet files from Google Drive (not Firebase).
