@@ -10,6 +10,7 @@ import 'package:MoneyTracker/services/services_module.dart';
 import 'package:MoneyTracker/utils/expense_categories.dart';
 import 'package:MoneyTracker/screens/spreadsheet_picker_screen.dart';
 import 'package:MoneyTracker/widgets/share_spreadsheet_dialog.dart';
+import '../features/ai_extractor/screens/ai_extractor_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -85,8 +86,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
   Future<void> _loadExpenseUiSettings() async {
     final email = _userEmail ?? _authService.userEmail;
-    final primary =
-        await ExpenseSettingsStorage.instance.getPrimarySheet(email);
+    final primary = await ExpenseSettingsStorage.instance.getPrimarySheet(
+      email,
+    );
     final mode = await ExpenseSettingsStorage.instance.getUpdateMode(email);
     final secDefault = await ExpenseSettingsStorage.instance
         .getSecondaryCheckboxDefaultChecked(email);
@@ -101,21 +103,20 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   }
 
   String _trackerStatusTitle() {
-    final p =
-        _primarySheet == ExpensePrimarySheet.shared ? 'Shared' : 'Personal';
+    final p = _primarySheet == ExpensePrimarySheet.shared
+        ? 'Shared'
+        : 'Personal';
     final m = _updateMode == ExpenseSheetsUpdateMode.both
         ? 'Both sheets'
         : 'Single sheet';
     return 'Primary: $p · $m';
   }
 
-  List<SpreadsheetInfo> get _savedCommonSheets => _savedSpreadsheets
-      .where((s) => s.sheetKind != 'personal')
-      .toList();
+  List<SpreadsheetInfo> get _savedCommonSheets =>
+      _savedSpreadsheets.where((s) => s.sheetKind != 'personal').toList();
 
-  List<SpreadsheetInfo> get _savedPersonalSheets => _savedSpreadsheets
-      .where((s) => s.sheetKind == 'personal')
-      .toList();
+  List<SpreadsheetInfo> get _savedPersonalSheets =>
+      _savedSpreadsheets.where((s) => s.sheetKind == 'personal').toList();
 
   @override
   void initState() {
@@ -470,8 +471,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: const Text('Sign in cancelled'),
-              backgroundColor:
-                  Theme.of(context).colorScheme.surfaceContainerHighest,
+              backgroundColor: Theme.of(
+                context,
+              ).colorScheme.surfaceContainerHighest,
             ),
           );
         }
@@ -592,9 +594,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
   Future<void> _openSpreadsheetPicker(SpreadsheetPickerPurpose purpose) async {
     if (!_isSignedIn) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please sign in first')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Please sign in first')));
       return;
     }
     final token = await _authService.getAccessToken();
@@ -818,7 +820,10 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text('Saved personal', style: TextStyle(fontSize: 13)),
+                          Text(
+                            'Saved personal',
+                            style: TextStyle(fontSize: 13),
+                          ),
                           Icon(Icons.arrow_drop_down),
                         ],
                       ),
@@ -892,9 +897,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       }
 
       final layoutOk = forPersonal
-          ? await _sheetsService.isCompatiblePersonalExpenseSheet(
-              spreadsheetId,
-            )
+          ? await _sheetsService.isCompatiblePersonalExpenseSheet(spreadsheetId)
           : await _sheetsService.isCompatibleExpenseSheet(spreadsheetId);
       if (!layoutOk) {
         if (mounted) {
@@ -1084,17 +1087,13 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
     if (writesShared && commonId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Set a shared spreadsheet ID.'),
-        ),
+        const SnackBar(content: Text('Set a shared spreadsheet ID.')),
       );
       return;
     }
     if (writesPersonal && personalId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Set a personal spreadsheet ID.'),
-        ),
+        const SnackBar(content: Text('Set a personal spreadsheet ID.')),
       );
       return;
     }
@@ -1111,8 +1110,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     // no need to guard here via Firebase meta (which may be missing for newly
     // created sheets).
 
-    final primarySpreadsheetId =
-        _primarySheet == ExpensePrimarySheet.shared ? commonId : personalId;
+    final primarySpreadsheetId = _primarySheet == ExpensePrimarySheet.shared
+        ? commonId
+        : personalId;
     _sheetsService.setSpreadsheetId(primarySpreadsheetId);
 
     final expenseId = const Uuid().v4();
@@ -1128,8 +1128,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
       paidBy: writesShared ? _selectedPaidBy : null,
       isOneTimePurchase: _isOneTimePurchase,
       addedByEmail: FirebaseAuth.instance.currentUser?.email,
-      linkedHomeSpreadsheetId:
-          commonId.isEmpty ? null : commonId,
+      linkedHomeSpreadsheetId: commonId.isEmpty ? null : commonId,
     );
 
     _autocompleteLabelController?.clear();
@@ -1714,9 +1713,7 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
   Future<void> _openAppSettings() async {
     await Navigator.push<void>(
       context,
-      MaterialPageRoute(
-        builder: (context) => const AppSettingsScreen(),
-      ),
+      MaterialPageRoute(builder: (context) => const AppSettingsScreen()),
     );
   }
 
@@ -1780,14 +1777,14 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
     final isDark = theme.brightness == Brightness.dark;
     final sharedPrimary = _primarySheet == ExpensePrimarySheet.shared;
     final colorSvc = ThemePreferenceService.instance;
-    final accentColor =
-        sharedPrimary ? colorSvc.sharedColor : colorSvc.personalColor;
+    final accentColor = sharedPrimary
+        ? colorSvc.sharedColor
+        : colorSvc.personalColor;
     final appBarBg = accentColor;
     const appBarFg = Colors.white;
     final tintAlpha = isDark ? 0.14 : 0.08;
     final tint = accentColor.withValues(alpha: tintAlpha);
-    final scaffoldBg =
-        Color.alphaBlend(tint, theme.colorScheme.surface);
+    final scaffoldBg = Color.alphaBlend(tint, theme.colorScheme.surface);
 
     return Scaffold(
       backgroundColor: scaffoldBg,
@@ -1828,6 +1825,29 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     content: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        ListTile(
+                          leading: const Icon(Icons.auto_awesome),
+                          title: const Text('AI Extract'),
+                          subtitle: const Text('Extract from screenshots'),
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => AIExtractorScreen(
+                                  commonSpreadsheetId:
+                                      _commonSpreadsheetIdController.text
+                                          .trim(),
+                                  personalSpreadsheetId:
+                                      _personalSpreadsheetIdController.text
+                                          .trim(),
+                                  userEmail: _userEmail,
+                                  defaultPaidBy: _selectedPaidBy,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                         ListTile(
                           leading: const Icon(Icons.settings),
                           title: const Text('Expense sheet settings'),
@@ -1947,7 +1967,9 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                       WidgetsBinding.instance.addPostFrameCallback((_) {
                         if (mounted &&
                             _labelCountMap.isEmpty &&
-                            _commonSpreadsheetIdController.text.trim().isNotEmpty &&
+                            _commonSpreadsheetIdController.text
+                                .trim()
+                                .isNotEmpty &&
                             !_labelCountMapLoadTriggered) {
                           _labelCountMapLoadTriggered = true;
                           _loadExpensesToUpdate();
@@ -1964,7 +1986,8 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                     // ),
                     OutlinedButton.icon(
                       onPressed: () {
-                        final spreadsheetId = _commonSpreadsheetIdController.text
+                        final spreadsheetId = _commonSpreadsheetIdController
+                            .text
                             .trim();
                         if (spreadsheetId.isEmpty) return;
                         Navigator.push(
@@ -2238,89 +2261,90 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
 
                 // Paid By: shared sheet column only
                 if (_writesSharedThisSubmit)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Paid By (Optional)',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Paid By (Optional)',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 6),
-                          if (_isLoadingPersonNames)
-                            const LinearProgressIndicator()
-                          else
-                            Wrap(
-                              spacing: 4,
-                              runSpacing: 4,
-                              children: [
-                                ..._personNames.map((name) {
-                                  return FilterChip(
+                            const SizedBox(height: 6),
+                            if (_isLoadingPersonNames)
+                              const LinearProgressIndicator()
+                            else
+                              Wrap(
+                                spacing: 4,
+                                runSpacing: 4,
+                                children: [
+                                  ..._personNames.map((name) {
+                                    return FilterChip(
+                                      pressElevation: 0,
+                                      visualDensity: VisualDensity.compact,
+                                      padding: EdgeInsets.all(2),
+                                      label: Text(
+                                        name,
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                      selected: _selectedPaidBy == name,
+                                      onSelected: (selected) {
+                                        setState(() {
+                                          _selectedPaidBy = selected
+                                              ? name
+                                              : null;
+                                          if (selected && name.isNotEmpty) {
+                                            _saveDefaultPaidByName(name);
+                                          } else {
+                                            _storageService
+                                                .clearDefaultPaidByName();
+                                          }
+                                        });
+                                      },
+                                    );
+                                  }),
+                                  FilterChip(
                                     pressElevation: 0,
                                     visualDensity: VisualDensity.compact,
                                     padding: EdgeInsets.all(2),
-                                    label: Text(
-                                      name,
+                                    label: const Text(
+                                      'None',
                                       style: TextStyle(fontSize: 12),
                                     ),
-                                    selected: _selectedPaidBy == name,
+                                    selected: _selectedPaidBy == null,
                                     onSelected: (selected) {
                                       setState(() {
-                                        _selectedPaidBy = selected
-                                            ? name
-                                            : null;
-                                        if (selected && name.isNotEmpty) {
-                                          _saveDefaultPaidByName(name);
-                                        } else {
+                                        if (selected) {
+                                          _selectedPaidBy = null;
                                           _storageService
                                               .clearDefaultPaidByName();
                                         }
                                       });
                                     },
-                                  );
-                                }),
-                                FilterChip(
-                                  pressElevation: 0,
-                                  visualDensity: VisualDensity.compact,
-                                  padding: EdgeInsets.all(2),
-                                  label: const Text(
-                                    'None',
-                                    style: TextStyle(fontSize: 12),
                                   ),
-                                  selected: _selectedPaidBy == null,
-                                  onSelected: (selected) {
-                                    setState(() {
-                                      if (selected) {
-                                        _selectedPaidBy = null;
-                                        _storageService
-                                            .clearDefaultPaidByName();
-                                      }
-                                    });
-                                  },
-                                ),
-                              ],
-                            ),
-                        ],
+                                ],
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: const Icon(Icons.add),
-                      onPressed: _isLoading ? null : _showAddPersonDialog,
-                      tooltip: 'Add new person',
-                      style: IconButton.styleFrom(
-                        backgroundColor:
-                            Theme.of(context).colorScheme.primaryContainer,
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.add),
+                        onPressed: _isLoading ? null : _showAddPersonDialog,
+                        tooltip: 'Add new person',
+                        style: IconButton.styleFrom(
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primaryContainer,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
                 if (_writesSharedThisSubmit) const SizedBox(height: 24),
 
                 // Submit Button

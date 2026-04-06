@@ -50,6 +50,13 @@ dependencies:
   url_launcher: 6.2.6
   flutter_colorpicker: ^1.1.0
 
+  # AI Extractor feature
+  # llama_cpp_dart: ^0.1.6
+  llama_cpp_dart: ^0.2.2
+  image_picker: ^1.0.7
+  file_picker: ^8.0.0
+  path_provider: ^2.1.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
