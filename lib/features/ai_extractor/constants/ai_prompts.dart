@@ -1,4 +1,4 @@
-/// Default prompt sent to the moondream2 model alongside a payment screenshot.
+/// Default prompt sent to Gemini alongside a payment screenshot.
 const String kDefaultExtractionPrompt = """
 You are a financial data extraction assistant. 
 Analyze this payment/transaction screenshot carefully.

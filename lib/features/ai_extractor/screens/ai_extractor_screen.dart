@@ -2,17 +2,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../providers/ai_extractor_provider.dart';
-import '../services/llm_service.dart' show isPlatformSupported;
-import '../widgets/model_status_bar.dart';
 import '../widgets/image_picker_grid.dart';
 import 'ai_model_setup_screen.dart';
 import 'ai_results_screen.dart';
 
-/// Main AI Extractor screen.
+/// Main AI Extractor screen (Gemini API backend).
 ///
-/// Top: model status bar
-/// Middle: image picker + optional prompt
-/// Bottom: extract button → navigates to results on success
+/// Top:    API-key status banner (tappable → opens setup if not configured)
+/// Middle: image picker + optional additional prompt
+/// Bottom: Extract button → navigates to results on success
 class AIExtractorScreen extends StatefulWidget {
   /// Spreadsheet IDs needed for saving extracted expenses later.
   final String commonSpreadsheetId;
@@ -64,7 +62,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
     }
   }
 
-  Future<void> _openModelSetup() async {
+  Future<void> _openApiKeySetup() async {
     final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => const AIModelSetupScreen()),
@@ -102,75 +100,32 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // ── Android not supported ──────────────────────────────────────────────
-    // llama_cpp_dart requires native C++ libraries (libmtmd.so) that must be
-    // compiled from source using the NDK. When installed via pub.dev, only
-    // macOS / iOS / Linux / Windows binaries are bundled.
-    if (!isPlatformSupported) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('AI Extract')),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.android, size: 56, color: Colors.grey),
-                const SizedBox(height: 16),
-                const Text(
-                  'Not available on Android',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'The on-device AI extractor uses llama.cpp native libraries '
-                  '(libmtmd.so) that need to be compiled from source with the '
-                  'Android NDK.\n\n'
-                  'This feature is currently supported on iOS and desktop only.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey, height: 1.5),
-                ),
-                const SizedBox(height: 24),
-                FilledButton.tonal(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Go Back'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    // ── Normal UI ──────────────────────────────────────────────────────────
     final theme = Theme.of(context);
     final isExtracting = _provider.status == AIExtractorStatus.extracting;
-    final isModelLoading = _provider.status == AIExtractorStatus.modelLoading;
+    final isConfigured = _provider.modelConfigured;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('AI Extract'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Model setup',
-            onPressed: _openModelSetup,
+            icon: const Icon(Icons.key_outlined),
+            tooltip: 'Gemini API key',
+            onPressed: _openApiKeySetup,
           ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // ── Model status ──
-          ModelStatusBar(
-            isConfigured: _provider.modelConfigured,
-            isLoaded: _provider.isModelLoaded,
-            onTap: _openModelSetup,
+          // ── API-key status banner ─────────────────────────────────────────
+          _ApiKeyBanner(
+            isConfigured: isConfigured,
+            onTap: _openApiKeySetup,
           ),
           const SizedBox(height: 18),
 
-          // ── Image picker trigger ──
+          // ── Image picker trigger ──────────────────────────────────────────
           OutlinedButton.icon(
             onPressed: isExtracting ? null : _pickImages,
             icon: const Icon(Icons.add_photo_alternate_outlined),
@@ -185,7 +140,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
           ),
           const SizedBox(height: 12),
 
-          // ── Image grid ──
+          // ── Image grid ────────────────────────────────────────────────────
           ImagePickerGrid(
             images: _provider.selectedImages,
             onRemove: _provider.removeImageAt,
@@ -194,7 +149,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
           if (_provider.selectedImages.isNotEmpty) ...[
             const SizedBox(height: 14),
 
-            // ── Additional prompt ──
+            // ── Additional prompt ─────────────────────────────────────────
             TextField(
               controller: _additionalPromptController,
               decoration: const InputDecoration(
@@ -212,13 +167,10 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
             ),
             const SizedBox(height: 18),
 
-            // ── Extract button ──
+            // ── Extract button ─────────────────────────────────────────────
             FilledButton.icon(
-              onPressed:
-                  isExtracting || isModelLoading || !_provider.modelConfigured
-                  ? null
-                  : _startExtraction,
-              icon: isExtracting || isModelLoading
+              onPressed: isExtracting || !isConfigured ? null : _startExtraction,
+              icon: isExtracting
                   ? const SizedBox(
                       width: 18,
                       height: 18,
@@ -229,11 +181,11 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
                     )
                   : const Icon(Icons.auto_awesome),
               label: Text(
-                isModelLoading
-                    ? 'Loading model…'
-                    : isExtracting
+                isExtracting
                     ? 'Processing ${_provider.currentImageIndex} of ${_provider.totalImages}…'
-                    : 'Extract Transactions',
+                    : isConfigured
+                        ? 'Extract Transactions'
+                        : 'Set up API Key first',
               ),
               style: FilledButton.styleFrom(
                 minimumSize: const Size(double.infinity, 50),
@@ -241,7 +193,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
             ),
           ],
 
-          // ── Error message ──
+          // ── Error message ─────────────────────────────────────────────────
           if (_provider.errorMessage != null) ...[
             const SizedBox(height: 14),
             Card(
@@ -253,11 +205,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
                 padding: const EdgeInsets.all(12),
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.error_outline,
-                      color: Colors.red,
-                      size: 20,
-                    ),
+                    const Icon(Icons.error_outline, color: Colors.red, size: 20),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
@@ -273,13 +221,87 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
 
           const SizedBox(height: 24),
 
-          // ── Info section ──
+          // ── Info section (shown when no images selected) ───────────────────
           if (_provider.selectedImages.isEmpty) _InfoCard(theme: theme),
         ],
       ),
     );
   }
 }
+
+// ── API key status banner ─────────────────────────────────────────────────────
+
+class _ApiKeyBanner extends StatelessWidget {
+  final bool isConfigured;
+  final VoidCallback onTap;
+
+  const _ApiKeyBanner({required this.isConfigured, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    if (isConfigured) {
+      return Card(
+        color: Colors.green.withValues(alpha: 0.1),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: ListTile(
+          leading: const Icon(Icons.check_circle, color: Colors.green),
+          title: const Text(
+            'Gemini API key configured',
+            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+          ),
+          subtitle: const Text('Tap to manage', style: TextStyle(fontSize: 12)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: onTap,
+        ),
+      );
+    }
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Card(
+        color: theme.colorScheme.errorContainer.withValues(alpha: 0.4),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(Icons.key_off_outlined, color: theme.colorScheme.error, size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Gemini API key not set',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: theme.colorScheme.error,
+                        fontSize: 14,
+                      ),
+                    ),
+                    Text(
+                      'Tap to enter your free API key → get one at aistudio.google.com',
+                      style: TextStyle(
+                        color: theme.colorScheme.onErrorContainer,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: theme.colorScheme.error),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Info card ─────────────────────────────────────────────────────────────────
 
 class _InfoCard extends StatelessWidget {
   final ThemeData theme;
@@ -296,11 +318,7 @@ class _InfoCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(
-                  Icons.info_outline,
-                  size: 20,
-                  color: theme.colorScheme.primary,
-                ),
+                Icon(Icons.info_outline, size: 20, color: theme.colorScheme.primary),
                 const SizedBox(width: 8),
                 Text(
                   'How it works',
@@ -311,10 +329,10 @@ class _InfoCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            const _StepRow(step: '1', text: 'Set up the AI model (one-time)'),
+            const _StepRow(step: '1', text: 'Enter your free Gemini API key (one-time)'),
             const _StepRow(step: '2', text: 'Add payment screenshots'),
-            const _StepRow(step: '3', text: 'Tap "Extract" to run AI'),
-            const _StepRow(step: '4', text: 'Review & save transactions'),
+            const _StepRow(step: '3', text: 'Tap "Extract" — Gemini reads the images'),
+            const _StepRow(step: '4', text: 'Review & save transactions to Google Sheets'),
           ],
         ),
       ),
@@ -347,7 +365,7 @@ class _StepRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(text, style: theme.textTheme.bodyMedium),
+          Expanded(child: Text(text, style: theme.textTheme.bodyMedium)),
         ],
       ),
     );

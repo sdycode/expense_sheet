@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
-import '../services/llm_service.dart' show LlmService, isPlatformSupported;
+import 'package:flutter/services.dart';
+import '../services/gemini_service.dart';
 
-/// One-time setup screen for picking the moondream2 model files.
+/// One-time setup screen where the user enters their Gemini API key.
 ///
-/// Users select the text-model GGUF and vision-projector GGUF. Both paths
-/// are persisted via [SharedPreferences] so the model can be loaded later.
+/// The key is stored persistently via [SharedPreferences]. After saving,
+/// the screen pops with [true] so the caller can refresh model status.
 class AIModelSetupScreen extends StatefulWidget {
   const AIModelSetupScreen({super.key});
 
@@ -14,71 +14,60 @@ class AIModelSetupScreen extends StatefulWidget {
 }
 
 class _AIModelSetupScreenState extends State<AIModelSetupScreen> {
-  String? _textModelPath;
-  String? _mmprojPath;
+  final _keyController = TextEditingController();
+  bool _obscure = true;
   bool _isSaving = false;
+  bool _hasExisting = false;
 
   @override
   void initState() {
     super.initState();
-    _loadExistingPaths();
+    _loadExistingKey();
   }
 
-  Future<void> _loadExistingPaths() async {
-    final paths = await LlmService.getModelPaths();
-    if (mounted) {
+  Future<void> _loadExistingKey() async {
+    final key = await GeminiService.loadApiKey();
+    if (mounted && key != null) {
       setState(() {
-        _textModelPath = paths.textPath;
-        _mmprojPath = paths.mmprojPath;
+        _hasExisting = true;
+        // Show masked placeholder — don't pre-fill for security.
       });
     }
   }
 
-  Future<void> _pickFile({required bool isTextModel}) async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.any,
-      allowMultiple: false,
-      dialogTitle: isTextModel
-          ? 'Select text model (.gguf)'
-          : 'Select vision projector (.gguf)',
-    );
-
-    if (result != null && result.files.single.path != null) {
-      setState(() {
-        if (isTextModel) {
-          _textModelPath = result.files.single.path;
-        } else {
-          _mmprojPath = result.files.single.path;
-        }
-      });
-    }
+  @override
+  void dispose() {
+    _keyController.dispose();
+    super.dispose();
   }
 
   Future<void> _save() async {
-    if (_textModelPath == null || _mmprojPath == null) return;
+    final key = _keyController.text.trim();
+    if (key.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter your API key')),
+      );
+      return;
+    }
 
     setState(() => _isSaving = true);
 
     try {
-      await LlmService.saveModelPaths(
-        textPath: _textModelPath!,
-        mmprojPath: _mmprojPath!,
-      );
-
+      await GeminiService.saveApiKey(key);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Model paths saved successfully!'),
+            content: Text('API key saved ✓'),
             backgroundColor: Colors.green,
           ),
         );
-        Navigator.pop(context, true); // true = paths updated
+        Navigator.pop(context, true); // true = key was updated
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error saving paths: $e'),
+            content: Text('Error saving key: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -88,60 +77,63 @@ class _AIModelSetupScreenState extends State<AIModelSetupScreen> {
     }
   }
 
+  Future<void> _clearKey() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove API Key'),
+        content: const Text('Are you sure you want to remove the saved Gemini API key?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await GeminiService.clearApiKey();
+      if (mounted) {
+        _keyController.clear();
+        setState(() => _hasExisting = false);
+        Navigator.pop(context, true);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Guard: native library not available on Android
-    if (!isPlatformSupported) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('AI Model Setup')),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.android, size: 56, color: Colors.grey),
-                const SizedBox(height: 16),
-                const Text(
-                  'Not available on Android',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'The AI model requires libmtmd.so (llama.cpp NDK build). '
-                  'Please use this feature on iOS or desktop.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey, height: 1.5),
-                ),
-                const SizedBox(height: 24),
-                FilledButton.tonal(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Go Back'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
     final theme = Theme.of(context);
-    final bothSet = _textModelPath != null && _mmprojPath != null;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('AI Model Setup')),
+      appBar: AppBar(
+        title: const Text('Gemini API Setup'),
+        actions: [
+          if (_hasExisting)
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Remove API key',
+              onPressed: _clearKey,
+            ),
+        ],
+      ),
       body: ListView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(24),
         children: [
-          // ── Header ──
+          // ── Icon + title ──────────────────────────────────────────────────
           Icon(
-            Icons.smart_toy_outlined,
+            Icons.auto_awesome,
             size: 56,
             color: theme.colorScheme.primary,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           Text(
-            'Configure Moondream 2',
+            'Connect Gemini AI',
             style: theme.textTheme.headlineSmall?.copyWith(
               fontWeight: FontWeight.bold,
             ),
@@ -149,57 +141,63 @@ class _AIModelSetupScreenState extends State<AIModelSetupScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Select the two GGUF model files from your device.\n'
-            'These files are needed for on-device AI extraction.',
+            'Enter your Google Gemini API key to enable AI-powered\ntransaction extraction from screenshots.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 32),
 
-          // ── Text model picker ──
-          _FilePickerTile(
-            title: 'Text Model',
-            subtitle: 'moondream2-text-model-f16.gguf',
-            filePath: _textModelPath,
-            onPick: () => _pickFile(isTextModel: true),
-          ),
-
-          const SizedBox(height: 14),
-
-          // ── Projector picker ──
-          _FilePickerTile(
-            title: 'Vision Projector',
-            subtitle: 'moondream2-mmproj-f16.gguf',
-            filePath: _mmprojPath,
-            onPick: () => _pickFile(isTextModel: false),
-          ),
-
-          const SizedBox(height: 28),
-
-          // ── Status indicator ──
-          if (bothSet)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.check_circle, color: Colors.green, size: 22),
-                const SizedBox(width: 8),
-                Text(
-                  'Both files selected',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.green,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+          // ── API key field ─────────────────────────────────────────────────
+          if (_hasExisting) ...[
+            Card(
+              color: Colors.green.withValues(alpha: 0.1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: const ListTile(
+                leading: Icon(Icons.check_circle, color: Colors.green),
+                title: Text('API key is saved'),
+                subtitle: Text('Enter a new key below to replace it'),
+              ),
             ),
+            const SizedBox(height: 16),
+          ],
 
+          TextField(
+            controller: _keyController,
+            obscureText: _obscure,
+            decoration: InputDecoration(
+              labelText: 'Gemini API Key',
+              hintText: _hasExisting ? 'Enter new key to replace existing' : 'AIza...',
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.key_outlined),
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: Icon(_obscure ? Icons.visibility_off : Icons.visibility),
+                    tooltip: _obscure ? 'Show' : 'Hide',
+                    onPressed: () => setState(() => _obscure = !_obscure),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.content_paste_outlined),
+                    tooltip: 'Paste',
+                    onPressed: () async {
+                      final data = await Clipboard.getData(Clipboard.kTextPlain);
+                      if (data?.text != null) {
+                        _keyController.text = data!.text!.trim();
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 20),
 
-          // ── Save button ──
+          // ── Save button ───────────────────────────────────────────────────
           FilledButton.icon(
-            onPressed: bothSet && !_isSaving ? _save : null,
+            onPressed: _isSaving ? null : _save,
             icon: _isSaving
                 ? const SizedBox(
                     width: 18,
@@ -207,10 +205,33 @@ class _AIModelSetupScreenState extends State<AIModelSetupScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.save),
-            label: const Text('Save Model Paths'),
+            label: Text(_isSaving ? 'Saving…' : 'Save API Key'),
             style: FilledButton.styleFrom(
-              minimumSize: const Size(double.infinity, 48),
+              minimumSize: const Size(double.infinity, 50),
             ),
+          ),
+          const SizedBox(height: 28),
+
+          // ── Info card ─────────────────────────────────────────────────────
+          _InfoTile(
+            theme: theme,
+            icon: Icons.link,
+            title: 'Get a free API key',
+            subtitle: 'Visit aistudio.google.com → Get API Key\n(no credit card required for free tier)',
+          ),
+          const SizedBox(height: 10),
+          _InfoTile(
+            theme: theme,
+            icon: Icons.lock_outline,
+            title: 'Stored locally on device',
+            subtitle: 'Your key is saved only in this app\'s private storage and is never shared.',
+          ),
+          const SizedBox(height: 10),
+          _InfoTile(
+            theme: theme,
+            icon: Icons.flash_on_outlined,
+            title: 'Gemini 1.5 Flash',
+            subtitle: 'Uses the fast, free-tier model for image analysis.',
           ),
         ],
       ),
@@ -218,61 +239,27 @@ class _AIModelSetupScreenState extends State<AIModelSetupScreen> {
   }
 }
 
-class _FilePickerTile extends StatelessWidget {
+class _InfoTile extends StatelessWidget {
+  final ThemeData theme;
+  final IconData icon;
   final String title;
   final String subtitle;
-  final String? filePath;
-  final VoidCallback onPick;
 
-  const _FilePickerTile({
+  const _InfoTile({
+    required this.theme,
+    required this.icon,
     required this.title,
     required this.subtitle,
-    required this.filePath,
-    required this.onPick,
   });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isSet = filePath != null;
-    final fileName = isSet ? filePath!.split('/').last : 'Not selected';
-
     return Card(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: ListTile(
-        leading: Icon(
-          isSet ? Icons.check_circle : Icons.file_open_outlined,
-          color: isSet ? Colors.green : theme.colorScheme.onSurfaceVariant,
-        ),
-        title: Text(title),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              subtitle,
-              style: TextStyle(
-                fontSize: 11,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              fileName,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: isSet ? FontWeight.w600 : FontWeight.normal,
-                color: isSet
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-        trailing: TextButton(
-          onPressed: onPick,
-          child: Text(isSet ? 'Change' : 'Pick'),
-        ),
+        leading: Icon(icon, color: theme.colorScheme.primary),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12, height: 1.4)),
       ),
     );
   }
