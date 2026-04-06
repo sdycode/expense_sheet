@@ -1,16 +1,16 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import '../models/ai_extraction_result.dart';
-import '../services/llm_service.dart';
+import '../services/gemini_service.dart';
 import '../services/extraction_parser.dart';
 import '../constants/ai_prompts.dart';
 
 /// Status of the AI extractor workflow.
-enum AIExtractorStatus { idle, modelLoading, extracting, done, error }
+enum AIExtractorStatus { idle, extracting, done, error }
 
-/// State management for the AI Extractor feature.
+/// State management for the AI Extractor feature (Gemini API backend).
 ///
-/// Tracks selected images, model status, extraction progress, and results.
+/// Tracks selected images, API key status, extraction progress, and results.
 class AIExtractorProvider extends ChangeNotifier {
   AIExtractorStatus _status = AIExtractorStatus.idle;
   final List<File> _selectedImages = [];
@@ -18,11 +18,11 @@ class AIExtractorProvider extends ChangeNotifier {
   String? _errorMessage;
   int _currentImageIndex = 0;
   int _totalImages = 0;
-  bool _modelConfigured = false;
 
-  final LlmService _llmService = LlmService();
+  /// True when a Gemini API key is stored in SharedPreferences.
+  bool _apiKeyConfigured = false;
 
-  // ── Getters ──
+  // ── Getters ──────────────────────────────────────────────────────────────
 
   AIExtractorStatus get status => _status;
   List<File> get selectedImages => List.unmodifiable(_selectedImages);
@@ -30,10 +30,22 @@ class AIExtractorProvider extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   int get currentImageIndex => _currentImageIndex;
   int get totalImages => _totalImages;
-  bool get modelConfigured => _modelConfigured;
-  bool get isModelLoaded => _llmService.isLoaded;
 
-  // ── Image management ──
+  /// True if an API key has been saved (model is "configured").
+  bool get modelConfigured => _apiKeyConfigured;
+
+  // ── Compatibility shim (used by AIExtractorScreen) ────────────────────────
+  bool get isModelLoaded => _apiKeyConfigured; // Gemini: no local model load step
+
+  // ── API-key management ───────────────────────────────────────────────────
+
+  /// Check whether a Gemini API key is stored and update [modelConfigured].
+  Future<void> checkModelConfiguration() async {
+    _apiKeyConfigured = await GeminiService.isApiKeyConfigured();
+    notifyListeners();
+  }
+
+  // ── Image management ─────────────────────────────────────────────────────
 
   void addImages(List<File> images) {
     _selectedImages.addAll(images);
@@ -52,38 +64,22 @@ class AIExtractorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Model management ──
+  // ── Extraction ───────────────────────────────────────────────────────────
 
-  /// Refresh the cached flag indicating whether model paths are stored.
-  Future<void> checkModelConfiguration() async {
-    _modelConfigured = await LlmService.areModelPathsConfigured();
-    notifyListeners();
-  }
-
-  /// Load the LLM model into memory.
-  Future<void> loadModel() async {
-    _status = AIExtractorStatus.modelLoading;
-    _errorMessage = null;
-    notifyListeners();
-
-    try {
-      await _llmService.loadModel();
-      _status = AIExtractorStatus.idle;
-    } catch (e) {
-      _status = AIExtractorStatus.error;
-      _errorMessage = 'Failed to load model: $e';
-    }
-    notifyListeners();
-  }
-
-  // ── Extraction ──
-
-  /// Run extraction across all selected images sequentially.
+  /// Run Gemini extraction across all selected images sequentially.
   ///
   /// [additionalPrompt] is appended to the default prompt if non-empty.
   Future<void> extractTransactions({String additionalPrompt = ''}) async {
     if (_selectedImages.isEmpty) {
       _errorMessage = 'No images selected';
+      _status = AIExtractorStatus.error;
+      notifyListeners();
+      return;
+    }
+
+    final apiKey = await GeminiService.loadApiKey();
+    if (apiKey == null) {
+      _errorMessage = 'Gemini API key not set. Please enter your API key first.';
       _status = AIExtractorStatus.error;
       notifyListeners();
       return;
@@ -96,22 +92,11 @@ class AIExtractorProvider extends ChangeNotifier {
     _currentImageIndex = 0;
     notifyListeners();
 
-    // Make sure the model is loaded.
-    if (!_llmService.isLoaded) {
-      try {
-        await _llmService.loadModel();
-      } catch (e) {
-        _status = AIExtractorStatus.error;
-        _errorMessage = 'Could not load model: $e';
-        notifyListeners();
-        return;
-      }
-    }
-
     final prompt = additionalPrompt.trim().isEmpty
         ? kDefaultExtractionPrompt
         : '$kDefaultExtractionPrompt\n\nAdditional instructions: $additionalPrompt';
 
+    final gemini = GeminiService(apiKey: apiKey);
     final allResults = <AIExtractionResult>[];
 
     for (int i = 0; i < _selectedImages.length; i++) {
@@ -119,18 +104,19 @@ class AIExtractorProvider extends ChangeNotifier {
       notifyListeners();
 
       try {
-        final rawOutput = await _llmService.runInference(
+        final rawOutput = await gemini.analyzeImage(
           imagePath: _selectedImages[i].path,
           prompt: prompt,
         );
 
-        debugPrint('LLM output for image ${i + 1}: $rawOutput');
+        debugPrint('Gemini output for image ${i + 1}: $rawOutput');
 
         final parsed = ExtractionParser.parse(rawOutput);
         allResults.addAll(parsed);
       } catch (e) {
         debugPrint('Error extracting from image ${i + 1}: $e');
-        // Continue with remaining images rather than aborting.
+        // Surface the last error but continue processing remaining images.
+        _errorMessage = 'Image ${i + 1}: $e';
       }
     }
 
@@ -138,15 +124,15 @@ class AIExtractorProvider extends ChangeNotifier {
 
     if (_results.isEmpty) {
       _status = AIExtractorStatus.error;
-      _errorMessage =
-          'No transactions could be extracted. Try clearer screenshots.';
+      _errorMessage ??= 'No transactions could be extracted. Try clearer screenshots.';
     } else {
       _status = AIExtractorStatus.done;
+      _errorMessage = null; // clear partial error on success
     }
     notifyListeners();
   }
 
-  /// Reset state back to idle, keeping model loaded.
+  /// Reset state back to idle.
   void reset() {
     _status = AIExtractorStatus.idle;
     _selectedImages.clear();
@@ -159,7 +145,6 @@ class AIExtractorProvider extends ChangeNotifier {
 
   @override
   void dispose() {
-    _llmService.dispose();
     super.dispose();
   }
 }
