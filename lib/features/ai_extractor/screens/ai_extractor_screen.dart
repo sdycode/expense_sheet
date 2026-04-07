@@ -1,12 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import '../providers/ai_extractor_provider.dart';
 import '../widgets/image_picker_grid.dart';
-import 'ai_model_setup_screen.dart';
 import 'ai_results_screen.dart';
+import 'api_key_settings_screen.dart';
 
-/// Main AI Extractor screen (Gemini API backend).
+/// Main AI Extractor screen (Multi-provider API backend).
 ///
 /// Top:    API-key status banner (tappable → opens setup if not configured)
 /// Middle: image picker + optional additional prompt
@@ -31,26 +32,20 @@ class AIExtractorScreen extends StatefulWidget {
 }
 
 class _AIExtractorScreenState extends State<AIExtractorScreen> {
-  late final AIExtractorProvider _provider;
   final _additionalPromptController = TextEditingController();
   final _imagePicker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
-    _provider = AIExtractorProvider();
-    _provider.addListener(_onProviderChanged);
-    _provider.checkModelConfiguration();
-  }
-
-  void _onProviderChanged() {
-    if (mounted) setState(() {});
+    // Refresh configuration status when entering.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<AIExtractorProvider>().checkModelConfiguration();
+    });
   }
 
   @override
   void dispose() {
-    _provider.removeListener(_onProviderChanged);
-    _provider.dispose();
     _additionalPromptController.dispose();
     super.dispose();
   }
@@ -58,33 +53,32 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
   Future<void> _pickImages() async {
     final picked = await _imagePicker.pickMultiImage(imageQuality: 85);
     if (picked.isNotEmpty) {
-      _provider.addImages(picked.map((x) => File(x.path)).toList());
+      context.read<AIExtractorProvider>().addImages(picked.map((x) => File(x.path)).toList());
     }
   }
 
   Future<void> _openApiKeySetup() async {
-    final result = await Navigator.push<bool>(
+    await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const AIModelSetupScreen()),
+      MaterialPageRoute(builder: (_) => const ApiKeySettingsScreen()),
     );
-    if (result == true) {
-      await _provider.checkModelConfiguration();
-    }
+    // Provider state will be updated inside ApiKeySettingsScreen.
   }
 
   Future<void> _startExtraction() async {
-    await _provider.extractTransactions(
+    final provider = context.read<AIExtractorProvider>();
+    await provider.extractTransactions(
       additionalPrompt: _additionalPromptController.text.trim(),
     );
 
-    if (_provider.status == AIExtractorStatus.done &&
-        _provider.results.isNotEmpty &&
+    if (provider.status == AIExtractorStatus.done &&
+        provider.results.isNotEmpty &&
         mounted) {
       await Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => AIResultsScreen(
-            results: _provider.results,
+            results: provider.results,
             commonSpreadsheetId: widget.commonSpreadsheetId,
             personalSpreadsheetId: widget.personalSpreadsheetId,
             userEmail: widget.userEmail ?? '',
@@ -93,7 +87,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
         ),
       );
       // Reset after returning from results.
-      _provider.reset();
+      provider.reset();
       _additionalPromptController.clear();
     }
   }
@@ -101,8 +95,9 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isExtracting = _provider.status == AIExtractorStatus.extracting;
-    final isConfigured = _provider.modelConfigured;
+    final provider = Provider.of<AIExtractorProvider>(context);
+    final isExtracting = provider.status == AIExtractorStatus.extracting;
+    final isConfigured = provider.modelConfigured;
 
     return Scaffold(
       appBar: AppBar(
@@ -110,7 +105,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.key_outlined),
-            tooltip: 'Gemini API key',
+            tooltip: 'API key settings',
             onPressed: _openApiKeySetup,
           ),
         ],
@@ -130,9 +125,9 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
             onPressed: isExtracting ? null : _pickImages,
             icon: const Icon(Icons.add_photo_alternate_outlined),
             label: Text(
-              _provider.selectedImages.isEmpty
+              provider.selectedImages.isEmpty
                   ? 'Add Images'
-                  : 'Add More Images (${_provider.selectedImages.length})',
+                  : 'Add More Images (${provider.selectedImages.length})',
             ),
             style: OutlinedButton.styleFrom(
               minimumSize: const Size(double.infinity, 48),
@@ -142,11 +137,11 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
 
           // ── Image grid ────────────────────────────────────────────────────
           ImagePickerGrid(
-            images: _provider.selectedImages,
-            onRemove: _provider.removeImageAt,
+            images: provider.selectedImages,
+            onRemove: provider.removeImageAt,
           ),
 
-          if (_provider.selectedImages.isNotEmpty) ...[
+          if (provider.selectedImages.isNotEmpty) ...[
             const SizedBox(height: 14),
 
             // ── Additional prompt ─────────────────────────────────────────
@@ -182,7 +177,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
                   : const Icon(Icons.auto_awesome),
               label: Text(
                 isExtracting
-                    ? 'Processing ${_provider.currentImageIndex} of ${_provider.totalImages}…'
+                    ? 'Processing ${provider.currentImageIndex} of ${provider.totalImages}…'
                     : isConfigured
                         ? 'Extract Transactions'
                         : 'Set up API Key first',
@@ -194,7 +189,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
           ],
 
           // ── Error message ─────────────────────────────────────────────────
-          if (_provider.errorMessage != null) ...[
+          if (provider.errorMessage != null) ...[
             const SizedBox(height: 14),
             Card(
               color: Colors.red.withValues(alpha: 0.1),
@@ -209,7 +204,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        _provider.errorMessage!,
+                        provider.errorMessage!,
                         style: TextStyle(color: Colors.red[700], fontSize: 13),
                       ),
                     ),
@@ -222,7 +217,7 @@ class _AIExtractorScreenState extends State<AIExtractorScreen> {
           const SizedBox(height: 24),
 
           // ── Info section (shown when no images selected) ───────────────────
-          if (_provider.selectedImages.isEmpty) _InfoCard(theme: theme),
+          if (provider.selectedImages.isEmpty) _InfoCard(theme: theme),
         ],
       ),
     );
@@ -248,10 +243,10 @@ class _ApiKeyBanner extends StatelessWidget {
         child: ListTile(
           leading: const Icon(Icons.check_circle, color: Colors.green),
           title: const Text(
-            'Gemini API key configured',
+            'AI Extraction engine configured',
             style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
           ),
-          subtitle: const Text('Tap to manage', style: TextStyle(fontSize: 12)),
+          subtitle: const Text('Tap to manage providers & keys', style: TextStyle(fontSize: 12)),
           trailing: const Icon(Icons.chevron_right),
           onTap: onTap,
         ),
@@ -275,7 +270,7 @@ class _ApiKeyBanner extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Gemini API key not set',
+                      'AI API keys not set',
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
                         color: theme.colorScheme.error,
@@ -283,7 +278,7 @@ class _ApiKeyBanner extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      'Tap to enter your free API key → get one at aistudio.google.com',
+                      'Tap to set up your AI engine (Gemini, Groq, Hugging Face, etc.)',
                       style: TextStyle(
                         color: theme.colorScheme.onErrorContainer,
                         fontSize: 12,
@@ -329,9 +324,9 @@ class _InfoCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            const _StepRow(step: '1', text: 'Enter your free Gemini API key (one-time)'),
+            const _StepRow(step: '1', text: 'Setup your free AI API key (one-time)'),
             const _StepRow(step: '2', text: 'Add payment screenshots'),
-            const _StepRow(step: '3', text: 'Tap "Extract" — Gemini reads the images'),
+            const _StepRow(step: '3', text: 'Tap "Extract" — AI reads the images'),
             const _StepRow(step: '4', text: 'Review & save transactions to Google Sheets'),
           ],
         ),

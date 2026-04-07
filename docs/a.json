@@ -1,0 +1,18 @@
+{
+    "gemini": {
+        "list": [
+            "AIzaSyBIi5tPp3xowkWDQLwEbUTQ5xbYWfxEARk",
+            "AIzaSyB16fY2W0v8LREW4pQ9vwnbh2Bo_RrWzck"
+        ]
+    },
+    "groq": {
+        "list": [
+            "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"
+        ]
+    },
+    "openrouter": {
+        "list": [
+            "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"
+        ]
+    }
+}

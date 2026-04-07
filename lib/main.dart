@@ -1,14 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
+import 'package:provider/provider.dart';
 import 'package:MoneyTracker/screens/startup_view.dart';
 import 'package:MoneyTracker/services/theme_preference_service.dart';
 import 'package:MoneyTracker/theme/app_themes.dart';
+import 'package:MoneyTracker/features/ai_extractor/providers/ai_extractor_provider.dart';
 
 Future<void> main() async {
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
   await ThemePreferenceService.instance.load();
-  runApp(const MyApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AIExtractorProvider()..init()),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
