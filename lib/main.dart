@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_gemma/core/api/flutter_gemma.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:provider/provider.dart';
 import 'package:MoneyTracker/screens/startup_view.dart';
@@ -8,6 +9,8 @@ import 'package:MoneyTracker/features/ai_extractor/providers/ai_extractor_provid
 
 Future<void> main() async {
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+ 
+   await FlutterGemma.initialize();
   FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
   await ThemePreferenceService.instance.load();
   runApp(

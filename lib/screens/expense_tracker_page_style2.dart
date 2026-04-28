@@ -11,6 +11,9 @@ import 'package:MoneyTracker/utils/expense_categories.dart';
 import 'package:MoneyTracker/screens/spreadsheet_picker_screen.dart';
 import 'package:MoneyTracker/widgets/share_spreadsheet_dialog.dart';
 import '../features/ai_extractor/screens/ai_extractor_screen.dart';
+import '../features/gemma_ai/screens/ai_setup_screen.dart';
+import '../features/gemma_ai/screens/gemma_dev_screen.dart';
+import '../features/gemma_ai/utils/dev_mode.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1848,6 +1851,34 @@ class _ExpenseTrackerPageStyle2State extends State<ExpenseTrackerPageStyle2> {
                             );
                           },
                         ),
+                        ListTile(
+                          leading: const Icon(Icons.psychology_outlined),
+                          title: const Text('Gemma AI Setup'),
+                          subtitle: const Text('Manage on-device AI model'),
+                          onTap: () {
+                            Navigator.pop(context);
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const AiSetupScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        if (devMode)
+                          ListTile(
+                            leading: const Icon(Icons.bug_report_outlined),
+                            title: const Text('Gemma Dev Screen'),
+                            onTap: () {
+                              Navigator.pop(context);
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const GemmaDevScreen(),
+                                ),
+                              );
+                            },
+                          ),
                         ListTile(
                           leading: const Icon(Icons.settings),
                           title: const Text('Expense sheet settings'),

@@ -57,6 +57,13 @@ dependencies:
   image_picker: ^1.2.1
   path_provider: ^2.1.2
 
+  # On-device LLM — Gemma (flutter_gemma)
+  flutter_gemma: ^0.14.0
+  # Explicit direct dep so its Dart method-channel handler is registered before
+  # flutter_gemma's SmartDownloader fires native progress events (prevents the
+  # "Flutter method not implemented" / "storing locally" loop on Android).
+  background_downloader: ^9.2.3
+
   # On-device model (kept for future use, currently unused)
   # llama_cpp_dart: ^0.2.2
   # file_picker: ^8.0.0
